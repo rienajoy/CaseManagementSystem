@@ -19,7 +19,6 @@ def create_user(db: Session, first_name, last_name, email, password, role, usern
     return user
 
 def authenticate_user(db: Session, email: str, password: str):
-    """Login via email only"""
     user = db.query(User).filter(User.email == email).first()
     if not user:
         return None
