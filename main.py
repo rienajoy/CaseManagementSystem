@@ -10,10 +10,13 @@ from admin_routes import admin_bp
 
 from utility import create_jwt, verify_password, verify_jwt, hash_password
 from auth import role_required, update_last_active
+from flask_cors import CORS
 
 Base.metadata.create_all(bind=engine)
 
 app = Flask(__name__)
+
+CORS(app)
 app.register_blueprint(admin_bp)
 
 UPLOAD_FOLDER = "uploads/profile_pics"

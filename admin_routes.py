@@ -11,6 +11,19 @@ from auth import role_required, permission_required
 admin_bp = Blueprint("admin_bp", __name__, url_prefix="/admin")
 
 ALLOWED_ROLES = ["prosecutor", "staff"]
+AVAILABLE_PERMISSIONS = [
+    "USER_CREATE",
+    "USER_UPDATE",
+    "USER_DELETE",
+    "USER_LOCK",
+    "USER_UNLOCK",
+    "USER_RESET_PASSWORD",
+]
+
+@admin_bp.route("/permissions", methods=["GET"])
+@role_required(["admin"])
+def get_available_permissions():
+    return jsonify(AVAILABLE_PERMISSIONS)
 
 @admin_bp.route("/users", methods=["POST"])
 @role_required(["admin"])
@@ -180,7 +193,7 @@ def lock_user(user_id):
         raise
     finally:
         db.close()
-        
+
 @admin_bp.route("/users/<int:user_id>/unlock", methods=["PUT"])
 @role_required(["admin"])
 @permission_required("USER_UNLOCK")
