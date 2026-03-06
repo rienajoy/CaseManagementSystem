@@ -1,0 +1,251 @@
+/* Full page background */
+
+.login-container {
+  height: 100vh;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+
+  background-image: url("court-bg.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Dark overlay so text is readable */
+
+.login-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(80, 0, 0, 0.55);
+}
+
+/* Login card */
+
+.login-card {
+  position: relative;
+  z-index: 2;
+
+  width: 380px;
+  padding: 40px;
+
+  border-radius: 14px;
+
+  background: rgba(255, 255, 255, 0.88);
+
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+
+  border: 1px solid rgba(255,255,255,0.35);
+
+  box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+
+  text-align: center;
+
+  animation: popIn 0.45s ease;
+}
+
+/* System title */
+
+.login-title {
+  font-size: 24px;
+  font-weight: bold;
+  color: #7a0f0f;
+  margin-bottom: 5px;
+}
+
+.login-title::after {
+  content: "";
+  display: block;
+  width: 80px;
+  height: 3px;
+  margin: 10px auto 16px auto;
+  background: linear-gradient(90deg, #caa24a, #f4d27a);
+  border-radius: 3px;
+}
+.login-subtitle {
+  font-size: 14px;
+  color: #555;
+  margin-bottom: 25px;
+}
+
+/* Inputs */
+
+.login-input {
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 15px;
+
+  border-radius: 8px;
+  border: 1px solid #ddd;
+
+  font-size: 14px;
+}
+
+/* Login button */
+
+.login-button {
+  width: 100%;
+  padding: 12px;
+
+  background: linear-gradient(135deg, #8b0000, #6e0000);
+  color: white;
+
+  border: none;
+  border-radius: 8px;
+
+  font-weight: bold;
+  font-size: 15px;
+
+  cursor: pointer;
+
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.2s;
+}
+
+.login-button:hover {
+  transform: translateY(-2px);
+
+  background: linear-gradient(135deg, #a00000, #7a0000);
+
+  box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+}
+
+.login-button:active {
+  transform: translateY(0px);
+}
+.login-button:hover {
+  background: #5e0b0b;
+}
+
+/* Error */
+
+.login-error {
+  margin-top: 10px;
+  color: crimson;
+  font-size: 14px;
+}
+
+/* DOJ seal logo */
+.login-logo {
+  width: 90px;
+  height: 90px;
+  object-fit: contain;
+  margin: 0 auto 14px auto;
+  display: block;
+}
+
+/* Card animation */
+@keyframes popIn {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.login-card {
+  animation: popIn 0.45s ease;
+}
+
+/* Password row (input + toggle) */
+.password-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.password-row .login-input {
+  margin-bottom: 0;
+  flex: 1;
+}
+
+
+
+.toggle-btn:hover {
+  background: #f0f0f0;
+}
+
+/* Remember me */
+.remember-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0 16px 0;
+  font-size: 13px;
+  color: #333;
+}
+
+.remember-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+/* Loading spinner */
+.spinner {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-top: 2px solid white;
+  display: inline-block;
+  margin-right: 8px;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.login-footer {
+  margin-top: 20px;
+  font-size: 12px;
+  color: #444;
+  opacity: 0.8;
+}
+
+.login-input:focus {
+  outline: none;
+  border: 1px solid #7a0f0f;
+  box-shadow: 0 0 0 2px rgba(122,15,15,0.15);
+}
+
+.login-button:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(122,15,15,0.25);
+}
+
+.toggle-btn:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(122,15,15,0.25);
+}
+
+.password-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-row .login-input {
+  width: 100%;
+  padding-right: 40px;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 12px;
+  cursor: pointer;
+  color: #555;
+  font-size: 16px;
+}
+
+.password-toggle:hover {
+  color: #7a0f0f;
+}
