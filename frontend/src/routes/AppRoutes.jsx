@@ -12,6 +12,7 @@ import MyProfile from "../pages/user/MyProfile";
 
 import AdminDashboard from "../pages/admin/AdminDashboard";
 import AdminUsers from "../pages/admin/AdminUsers";
+import AdminPermissions from "../pages/admin/AdminPermissions";
 import UserStatus from "../pages/admin/UserStatus";
 
 import Unauthorized from "../pages/system/Unauthorized";
@@ -38,14 +39,14 @@ export default function AppRoutes() {
         />
 
         <Route
-            path="/settings"
-            element={
-                <ProtectedRoute>
-                <Settings />
-                </ProtectedRoute>
-            }
-            />
-            
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <Settings />
+            </ProtectedRoute>
+          }
+        />
+
         <Route
           path="/dashboard"
           element={
@@ -78,6 +79,15 @@ export default function AppRoutes() {
           element={
             <ProtectedRoute allowedRoles={ADMIN_ROLES}>
               <AdminUsers />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/admin/permissions"
+          element={
+            <ProtectedRoute allowedRoles={ADMIN_ROLES}>
+              <AdminPermissions />
             </ProtectedRoute>
           }
         />
