@@ -3,57 +3,63 @@ import { useNavigate } from "react-router-dom";
 import { FiRefreshCw } from "react-icons/fi";
 
 import api from "../../api";
-import { logout } from "../../auth";
 
-import Sidebar from "../../components/Sidebar";
-import Topbar from "../../components/Topbar";
+import AdminLayout from "../../components/AdminLayout";
 import StatusList from "../../components/StatusList";
 
 import "../../styles/dashboard.css";
+import { isAdminLevel } from "../../utils/roles";
+import { getStoredUser, setStoredUser } from "../../utils/storage";
+import { getUsersStatus } from "../../services/adminService";
 
 export default function UserStatus() {
   const navigate = useNavigate();
 
-  const [user, setUser] = useState(
-    JSON.parse(localStorage.getItem("user") || "null")
-  );
+  const [user, setUser] = useState(getStoredUser());
 
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const adminLevel = isAdminLevel(user);
 
   useEffect(() => {
-    if (!user) {
-      navigate("/");
-      return;
-    }
+    async function init() {
+      if (!user) {
+        navigate("/");
+        return;
+      }
 
-    if (user.role !== "admin") {
-      navigate("/unauthorized");
-      return;
-    }
-
-    async function refreshUser() {
       try {
         const res = await api.get("/my-profile");
-        localStorage.setItem("user", JSON.stringify(res.data));
+        setStoredUser(res.data);
         setUser(res.data);
+
+        if (!isAdminLevel(res.data)) {
+          navigate("/unauthorized");
+          return;
+        }
+
+        await load();
       } catch (err) {
         console.error("Failed to refresh user profile", err);
+        navigate("/unauthorized");
       }
     }
 
-    refreshUser();
-    load();
+    init();
 
-    const interval = setInterval(load, 10000);
+    const interval = setInterval(() => {
+      load();
+    }, 10000);
+
     return () => clearInterval(interval);
   }, []);
 
   async function load() {
     setLoading(true);
+
     try {
-      const res = await api.get("/users-status");
+      const res = await getUsersStatus();
       setRows(res.data);
     } catch (err) {
       console.error("Failed to load user status", err);
@@ -62,77 +68,49 @@ export default function UserStatus() {
     }
   }
 
-  function handleLogout() {
-    logout();
-    navigate("/");
-  }
-
-  function toggleSidebar() {
-    setSidebarOpen(!sidebarOpen);
-  }
-
   if (!user) {
     return <div style={{ padding: 20 }}>Redirecting...</div>;
   }
 
+  if (!adminLevel) {
+    return <div style={{ padding: 20 }}>Checking access...</div>;
+  }
+
   return (
-    <div className="app-shell">
-      {sidebarOpen && (
-        <div
-          className="sidebar-overlay"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
+    <AdminLayout user={user}>
+      <div className="welcome-block">
+        <div className="page-badge">Monitoring</div>
+        <h1>User Activity Monitor</h1>
+        <p className="subtitle">
+          View account activity and online or last-seen status of registered
+          users.
+        </p>
+      </div>
 
-      <Sidebar
-        user={user}
-        open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
-
-      <div className="main">
-        <Topbar
-          user={user}
-          onLogout={handleLogout}
-          onToggleSidebar={toggleSidebar}
-        />
-
-        <div className="content">
-          <div className="welcome-block">
-            <div className="page-badge">Monitoring</div>
-            <h1>User Activity Monitor</h1>
-            <p className="subtitle">
-              View account activity and online or last-seen status of registered
-              users.
+      <div className="panel monitor-panel">
+        <div className="panel-header">
+          <div>
+            <h3>User Status Directory</h3>
+            <p className="panel-subtitle">
+              Status refreshes automatically every 10 seconds.
             </p>
           </div>
 
-          <div className="panel monitor-panel">
-            <div className="panel-header">
-              <div>
-                <h3>User Status Directory</h3>
-                <p className="panel-subtitle">
-                  Status refreshes automatically every 10 seconds.
-                </p>
-              </div>
-
-              <button
-                className="refresh-btn"
-                onClick={load}
-                title="Refresh"
-              >
-                <FiRefreshCw />
-              </button>
-            </div>
-
-            <StatusList rows={rows} />
-          </div>
-
-          <div className="footer">
-            <span>Case Management System • DOJ Prototype</span>
-          </div>
+          <button
+            className={`refresh-btn ${loading ? "loading" : ""}`}
+            onClick={load}
+            title="Refresh"
+          >
+            <FiRefreshCw />
+          </button>
         </div>
+
+        <StatusList rows={rows} />
       </div>
-    </div>
+
+      <div className="footer">
+        <span>Case Management System • DOJ Prototype</span>
+      </div>
+    </AdminLayout>
   );
 }

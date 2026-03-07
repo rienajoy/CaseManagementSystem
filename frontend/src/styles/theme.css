@@ -1,0 +1,71 @@
+:root {
+  --bg-app: #f6f7fb;
+  --bg-panel: #ffffff;
+  --bg-soft: #f8fafc;
+  --text-main: #111827;
+  --text-muted: #6b7280;
+  --border-soft: #e6e8ef;
+  --border-light: #e5e7eb;
+}
+
+:root.theme-dark {
+  --bg-app: #0f172a;
+  --bg-panel: #111827;
+  --bg-soft: #1f2937;
+  --text-main: #f9fafb;
+  --text-muted: #cbd5e1;
+  --border-soft: #334155;
+  --border-light: #334155;
+}
+
+body {
+  background: var(--bg-app);
+  color: var(--text-main);
+}
+
+.app-shell {
+  background: var(--bg-app);
+}
+
+.panel,
+.action-card,
+.stat-card,
+.online-user-card,
+.user-chip,
+.dropdown {
+  background: var(--bg-panel);
+  color: var(--text-main);
+  border-color: var(--border-soft);
+}
+
+.subtitle,
+.panel-subtitle,
+.stat-title,
+.user-role,
+.action-desc,
+.online-user-role,
+.hint,
+.admin-log-meta,
+.admin-log-time,
+.topbar-subtitle {
+  color: var(--text-muted);
+}
+
+.topbar,
+.manage-users-table th,
+.empty,
+.admin-analytic-box {
+  background: var(--bg-soft);
+}
+
+.topbar,
+.panel,
+.action-card,
+.stat-card,
+.manage-users-table th,
+.online-user-card,
+.user-chip,
+.dropdown,
+.admin-analytic-box {
+  border-color: var(--border-light);
+}

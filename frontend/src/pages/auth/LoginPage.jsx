@@ -1,8 +1,15 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import api from "../api";
-import "../styles/login.css";
+import api from "../../api";
+import "../../styles/login.css";
 import { FaEye, FaEyeSlash } from "react-icons/fa";
+import {
+  getRememberedEmail,
+  setRememberedEmail,
+  clearRememberedEmail,
+  setStoredToken,
+  setStoredUser,
+} from "../../utils/storage";
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -16,9 +23,8 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // ✅ Load remembered email
   useEffect(() => {
-    const savedEmail = localStorage.getItem("remember_email");
+    const savedEmail = getRememberedEmail();
     if (savedEmail) {
       setEmail(savedEmail);
       setRememberMe(true);
@@ -33,15 +39,14 @@ export default function LoginPage() {
     try {
       const res = await api.post("/login", { email, password });
 
-      // remember email if checked
       if (rememberMe) {
-        localStorage.setItem("remember_email", email);
+        setRememberedEmail(email);
       } else {
-        localStorage.removeItem("remember_email");
+        clearRememberedEmail();
       }
 
-      localStorage.setItem("token", res.data.token);
-      localStorage.setItem("user", JSON.stringify(res.data.user));
+      setStoredToken(res.data.token);
+      setStoredUser(res.data.user);
 
       if (res.data.user.must_change_password) {
         navigate("/change-password");
@@ -61,10 +66,11 @@ export default function LoginPage() {
       <div className="login-overlay"></div>
 
       <div className="login-card">
-        {/* ✅ DOJ Seal */}
         <img className="login-logo" src="/doj-seal.jpg" alt="DOJ Seal" />
 
-        <div className="login-title">Provincial Prosecutor's Office Case Management System</div>
+        <div className="login-title">
+          Provincial Prosecutor&apos;s Office Case Management System
+        </div>
         <div className="login-subtitle">Department of Justice</div>
 
         <form onSubmit={handleLogin}>
@@ -78,26 +84,24 @@ export default function LoginPage() {
             required
           />
 
-          {/* ✅ Password with toggle */}
-         <div className="password-row">
-  <input
-    className="login-input"
-    type={showPw ? "text" : "password"}
-    placeholder="Password"
-    value={password}
-    onChange={(e) => setPassword(e.target.value)}
-    required
-  />
+          <div className="password-row">
+            <input
+              className="login-input"
+              type={showPw ? "text" : "password"}
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
 
-  <span
-    className="password-toggle"
-    onClick={() => setShowPw(!showPw)}
-  >
-    {showPw ? <FaEyeSlash /> : <FaEye />}
-  </span>
-</div>
+            <span
+              className="password-toggle"
+              onClick={() => setShowPw(!showPw)}
+            >
+              {showPw ? <FaEyeSlash /> : <FaEye />}
+            </span>
+          </div>
 
-          {/* ✅ remember me */}
           <div className="remember-row">
             <label>
               <input
@@ -109,7 +113,6 @@ export default function LoginPage() {
             </label>
           </div>
 
-          {/* ✅ loading spinner */}
           <button className="login-button" disabled={loading}>
             {loading ? (
               <>
@@ -125,8 +128,8 @@ export default function LoginPage() {
         </form>
 
         <div className="login-footer">
-  Authorized Personnel Only • Department of Justice
-</div>
+          Authorized Personnel Only • Department of Justice
+        </div>
       </div>
     </div>
   );

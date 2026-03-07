@@ -1,4 +1,4 @@
-// src/components/AdminLayout.jsx
+// src/components/UserLayout.jsx
 
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -8,7 +8,7 @@ import Topbar from "./Topbar";
 import { logout } from "../auth";
 import { getAppSettings } from "../utils/appSettings";
 
-export default function AdminLayout({ user, children }) {
+export default function UserLayout({ user, children }) {
   const navigate = useNavigate();
 
   const [sidebarOpen, setSidebarOpen] = useState(false);

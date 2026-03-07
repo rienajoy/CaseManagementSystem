@@ -58,19 +58,22 @@ export default function Topbar({ user, onLogout, onToggleSidebar }) {
         </button>
 
         {open && (
-          <div className="dropdown">
-            <button
-              className="dropdown-item"
-              onClick={() => navigate("/my-profile")}
-            >
-              My Profile
-            </button>
+  <div className="dropdown">
+    <button
+  className="dropdown-item"
+  onClick={() => navigate("/settings")}
+>
+  Settings
+</button>
 
-            <button className="dropdown-item danger" onClick={onLogout}>
-              Logout
-            </button>
-          </div>
-        )}
+    <button
+      className="dropdown-item danger"
+      onClick={onLogout}
+    >
+      Logout
+    </button>
+  </div>
+)}
       </div>
     </header>
   );
