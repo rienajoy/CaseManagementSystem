@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { FaChevronDown, FaAngleDoubleLeft } from "react-icons/fa";
+import { FaChevronDown, FaRegBell } from "react-icons/fa";
+import { IoNotificationsOutline } from "react-icons/io5";
 import { useNavigate } from "react-router-dom";
 import "../styles/layout/topbar.css";
 
@@ -31,12 +32,21 @@ export default function Topbar({ user, onLogout, onToggleSidebar }) {
   }, []);
 
   return (
+
+    
     <header className="topbar topbar-modern">
       <div className="topbar-left-wrap">
 
         <div className="topbar-left">
+            
+            <div className="staff-dashboard-hero-left">
+              <div className="page-badge">STAFF DASHBOARD</div>
+            </div>
+
+
+
           <div className="topbar-greeting-block">
-            <div className="topbar-greeting-title">Hello, {firstName}!</div>
+            <div className="topbar-greeting-title">Welcome, {firstName}!</div>
             <div className="topbar-greeting-subtitle">
               Ready to manage case records today?
             </div>
@@ -46,14 +56,14 @@ export default function Topbar({ user, onLogout, onToggleSidebar }) {
 
       <div className="topbar-right">
         <div className="topbar-actions">
-          <button
-            type="button"
-            className="topbar-circle-btn"
-            aria-label="Notifications"
-            title="Notifications"
-          >
-            <span>🔔</span>
-          </button>
+         <button
+          type="button"
+          className="topbar-circle-btn"
+          aria-label="Notifications"
+          title="Notifications"
+        >
+          <IoNotificationsOutline />
+        </button>
         </div>
 
         <div className="topbar-user-area" ref={dropdownRef}>

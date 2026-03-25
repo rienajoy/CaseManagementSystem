@@ -59,8 +59,15 @@ export default function StaffDashboard() {
         return;
       }
 
-      const summaryRes = await getStaffDashboardSummary();
-      setSummary(summaryRes?.data?.data || {});
+      
+
+const summaryRes = await getStaffDashboardSummary();
+const dashboardSummary = summaryRes?.data?.data || {};
+
+console.log("dashboardSummary:", dashboardSummary);
+console.log("dashboardSummary.offenses:", dashboardSummary?.offenses);
+
+setSummary(dashboardSummary);
     } catch (e) {
       setErr(e?.response?.data?.message || "Failed to load staff dashboard.");
     } finally {
@@ -107,19 +114,16 @@ const topCasePercent =
 
   // Temporary sample data for offenses/violations.
   // Replace this with backend data when available.
-  const offenseChartData =
-    summary?.offenses?.length > 0
-      ? summary.offenses.map((item) => ({
-          name: item.offense || item.name || "Unknown",
-          total: Number(item.total || 0),
-        }))
-      : [
-          { name: "Theft", total: 18 },
-          { name: "Assault", total: 12 },
-          { name: "Fraud", total: 9 },
-          { name: "Drugs", total: 15 },
-          { name: "Vandalism", total: 6 },
-        ];
+const offenseChartData = Array.isArray(summary?.offenses)
+  ? summary.offenses
+      .slice(0, 5)
+      .map((item) => ({
+        name: item.name || "Unknown",
+        total: Number(item.total || 0),
+      }))
+  : [];
+console.log("summary state:", summary);
+console.log("offenseChartData:", offenseChartData);
 
   const recentIntakeCases = summary?.recent_intake_cases || [
   {
@@ -230,34 +234,6 @@ function getStatusClass(status = "") {
   return (
     <UserLayout user={user}>
       <div className="staff-dashboard-page">
-        <div className="staff-dashboard-hero-container">
-          <div className="staff-dashboard-hero-inner">
-            <div className="staff-dashboard-hero-left">
-              <div className="page-badge">STAFF DASHBOARD</div>
-              <h2 className="hero-title">Welcome, {user.first_name}!</h2>
-              <p className="hero-subtitle">
-                Monitor intake, official, and legacy case activity here.
-              </p>
-            </div>
-
-            <div className="staff-dashboard-hero-actions">
-              <button
-                className="hero-btn primary"
-                onClick={() => navigate("/staff/intake-cases")}
-              >
-                + New Intake Case
-              </button>
-
-              <button
-                className="hero-btn ghost"
-                onClick={() => navigate("/staff/cases")}
-              >
-                + Old Case
-              </button>
-            </div>
-          </div>
-        </div>
-
         {loading ? (
           <div className="panel">
             <div className="empty">Loading staff dashboard...</div>
@@ -270,7 +246,7 @@ function getStatusClass(status = "") {
               </div>
             ) : null}
 <div className="staff-dashboard-grid charts-split-layout">
-<div className="offenses-panel-modern chart-card">
+  <div className="offenses-panel-modern chart-card">
     <div className="chart-card-header">
       <div>
         <h3>Offenses / Violations</h3>
@@ -279,123 +255,133 @@ function getStatusClass(status = "") {
     </div>
 
     <div className="offenses-chart-wrap horizontal-chart">
-      <ResponsiveContainer width="100%" height={300}>
-        <BarChart
-          data={offenseChartData}
-          layout="vertical"
-          margin={{ top: 6, right: 10, left: 8, bottom: 6 }}
-        >
-          <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#ece7e4" />
-          <XAxis
-            type="number"
-            allowDecimals={false}
-            axisLine={false}
-            tickLine={false}
-            tick={{ fontSize: 12, fill: "#8b8b8b" }}
-          />
-          <YAxis
-            type="category"
-            dataKey="name"
-            width={130}
-            axisLine={false}
-            tickLine={false}
-            tick={{ fontSize: 12, fill: "#444" }}
-          />
-          <Tooltip />
-          <Bar
-            dataKey="total"
-            radius={[0, 10, 10, 0]}
-            fill="#841428"
-            barSize={24}
-          />
-        </BarChart>
-      </ResponsiveContainer>
+      {offenseChartData.length > 0 ? (
+<ResponsiveContainer width="100%" height={320}>
+  <BarChart
+    data={offenseChartData}
+    layout="vertical"
+    margin={{ top: 10, right: 18, left: -30, bottom: 10 }}
+  >
+    <CartesianGrid
+      strokeDasharray="3 3"
+      horizontal={false}
+      stroke="#ece7e4"
+    />
+    <XAxis
+      type="number"
+      allowDecimals={false}
+      axisLine={false}
+      tickLine={false}
+      tick={{ fontSize: 12, fill: "#8b8b8b" }}
+    />
+<YAxis
+  type="category"
+  dataKey="name"
+  width={92}
+  axisLine={false}
+  tickLine={false}
+  tick={{ fontSize: 10, fill: "#444" }}
+  tickFormatter={(value) =>
+    value.length > 16 ? `${value.slice(0, 16)}...` : value
+  }
+/>  
+    <Tooltip />
+    <Bar
+      dataKey="total"
+      radius={[0, 10, 10, 0]}
+      fill="#841428"
+      barSize={24}
+    />
+  </BarChart>
+</ResponsiveContainer>
+      ) : (
+        <div className="empty">No offense/violation data available.</div>
+      )}
     </div>
   </div>
 
-<div className="system-summary-panel-modern chart-card budget-style-card">
-  <div className="chart-card-header budget-style-header">
-    <div>
-      <h3>Case Distribution</h3>
-      <p className="panel-subtitle">Case distribution overview</p>
+  <div className="system-summary-panel-modern chart-card budget-style-card">
+    <div className="chart-card-header budget-style-header">
+      <div>
+        <h3>Case Distribution</h3>
+        <p className="panel-subtitle">Case distribution overview</p>
+      </div>
     </div>
-  </div>
 
-  <div className="budget-style-layout">
-    <div className="budget-style-legend">
-      {systemSummaryChartData.map((item, index) => (
-        <div key={item.name} className="budget-style-legend-item">
-          <div className="budget-style-legend-left">
-            <span
-              className="budget-style-dot"
-              style={{
-                backgroundColor: SYSTEM_SUMMARY_COLORS[index],
-              }}
-            />
-            <span className="budget-style-label">{item.name}</span>
+    <div className="budget-style-layout">
+      <div className="budget-style-legend">
+        {systemSummaryChartData.map((item, index) => (
+          <div key={item.name} className="budget-style-legend-item">
+            <div className="budget-style-legend-left">
+              <span
+                className="budget-style-dot"
+                style={{
+                  backgroundColor: SYSTEM_SUMMARY_COLORS[index],
+                }}
+              />
+              <span className="budget-style-label">{item.name}</span>
+            </div>
+
+            <span className="budget-style-legend-value">{item.value}</span>
           </div>
-
-          <span className="budget-style-legend-value">{item.value}</span>
-        </div>
-      ))}
-    </div>
-
-    <div className="budget-style-chart-side">
-      <div className="budget-style-floating-chip">
-        <span className="budget-style-chip-percent">{topCasePercent}%</span>
-        <span className="budget-style-chip-value">
-          {topCaseItem?.value || 0}
-        </span>
+        ))}
       </div>
 
-      <div className="budget-style-chart-wrap">
-        <ResponsiveContainer width="100%" height={260}>
-          <PieChart>
-            <Pie
-              data={systemSummaryPieData}
-              dataKey="value"
-              nameKey="name"
-              innerRadius={72}
-              outerRadius={98}
-              paddingAngle={hasSystemSummaryData ? 8 : 0}
-              cornerRadius={hasSystemSummaryData ? 10 : 999}
-              startAngle={90}
-              endAngle={-270}
-              stroke="none"
-            >
-              {hasSystemSummaryData ? (
-                systemSummaryChartData.map((entry, index) => (
-                  <Cell
-                    key={`cell-${entry.name}`}
-                    fill={
-                      SYSTEM_SUMMARY_COLORS[
-                        index % SYSTEM_SUMMARY_COLORS.length
-                      ]
-                    }
-                  />
-                ))
-              ) : (
-                <Cell fill="#ece8e4" />
-              )}
-            </Pie>
-          </PieChart>
-        </ResponsiveContainer>
+      <div className="budget-style-chart-side">
+        <div className="budget-style-floating-chip">
+          <span className="budget-style-chip-percent">{topCasePercent}%</span>
+          <span className="budget-style-chip-value">
+            {topCaseItem?.value || 0}
+          </span>
+        </div>
 
-        <div className="budget-style-center-label">
-          <div className="budget-style-center-subtitle">Total cases</div>
-          <div className="budget-style-center-value">{totalSystemCases}</div>
+        <div className="budget-style-chart-wrap">
+          <ResponsiveContainer width="100%" height={260}>
+            <PieChart>
+              <Pie
+                data={systemSummaryPieData}
+                dataKey="value"
+                nameKey="name"
+                innerRadius={46}
+                outerRadius={66}
+                paddingAngle={hasSystemSummaryData ? 8 : 0}
+                cornerRadius={hasSystemSummaryData ? 10 : 999}
+                startAngle={90}
+                endAngle={-270}
+                stroke="none"
+              >
+                {hasSystemSummaryData ? (
+                  systemSummaryChartData.map((entry, index) => (
+                    <Cell
+                      key={`cell-${entry.name}`}
+                      fill={
+                        SYSTEM_SUMMARY_COLORS[
+                          index % SYSTEM_SUMMARY_COLORS.length
+                        ]
+                      }
+                    />
+                  ))
+                ) : (
+                  <Cell fill="#ece8e4" />
+                )}
+              </Pie>
+            </PieChart>
+          </ResponsiveContainer>
+
+          <div className="budget-style-center-label">
+            <div className="budget-style-center-subtitle">Total cases</div>
+            <div className="budget-style-center-value">{totalSystemCases}</div>
+          </div>
         </div>
       </div>
     </div>
   </div>
-</div>  
-</div>   
-
+</div>
 <div className="staff-summary-cards">
   <div className="summary-card">
     <div className="summary-card-label">Intake for Review</div>
     <div className="summary-card-value">
-      {summary?.intake?.for_review ?? 0}
+      {summary?.intake?.needs_review ?? 0}
     </div>
   </div>
 
@@ -416,7 +402,7 @@ function getStatusClass(status = "") {
   <div className="summary-card">
     <div className="summary-card-label">Official Overdue Compliance</div>
     <div className="summary-card-value">
-      {summary?.official_cases?.overdue ?? 0}
+      {summary?.compliance?.official?.timeline?.overdue ?? 0}
     </div>
   </div>
 </div>

@@ -5,12 +5,13 @@
   height: auto !important;
   min-height: 56px !important;
   padding: 8px 18px 8px 78px !important; /* reserve left space for toggle */
-  background: #f7efe6 !important;
+  background: #f7efe6 ;
   border-bottom: 1px solid rgba(132, 20, 40, 0.08);
   box-shadow: 0 4px 12px rgba(132, 20, 40, 0.04);
   box-sizing: border-box;
   position: relative;
   z-index: 5;
+  width: 100% !important;
 }
 
 .main-sidebar-closed .topbar {
@@ -27,10 +28,10 @@
 .topbar-greeting-block {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: left !important;
   min-width: 0;
-  margin-left: 0 !important;
-  padding-left: 0 !important;
+  margin-left: -20px;
+  margin-top:-10px;
 }
 
 .topbar-greeting-title {
@@ -84,6 +85,10 @@
   box-shadow: 0 6px 14px rgba(132, 20, 40, 0.08);
 }
 
+.topbar-circle-btn svg {
+  font-size: 20px;
+  display: block;
+}
 .topbar-user-area {
   position: relative;
 }

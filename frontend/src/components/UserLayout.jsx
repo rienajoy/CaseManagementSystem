@@ -1,5 +1,3 @@
-// src/components/UserLayout.jsx
-
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -40,8 +38,6 @@ export default function UserLayout({ user, children }) {
       setIsDesktop(desktop);
 
       if (!desktop) {
-        setSidebarOpen(true);
-      } else {
         setMobileSidebarOpen(false);
       }
     }
@@ -53,7 +49,15 @@ export default function UserLayout({ user, children }) {
   }, []);
 
   return (
-    <div className="app-shell">
+    <div
+      className={`app-shell ${
+        isDesktop
+          ? sidebarOpen
+            ? "app-shell-sidebar-open"
+            : "app-shell-sidebar-closed"
+          : "app-shell-mobile"
+      }`}
+    >
       {mobileSidebarOpen && (
         <div className="sidebar-overlay" onClick={closeMobileSidebar} />
       )}
@@ -64,12 +68,13 @@ export default function UserLayout({ user, children }) {
         mobileOpen={mobileSidebarOpen}
         onToggle={toggleSidebar}
         onCloseMobile={closeMobileSidebar}
+        onLogout={handleLogout}
       />
 
-      {!sidebarOpen && isDesktop && (
+      {!mobileSidebarOpen && !isDesktop && (
         <button
           type="button"
-          className="sidebar-docked-open-btn"
+          className="sidebar-mobile-open-btn"
           onClick={toggleSidebar}
           aria-label="Open sidebar"
           title="Open sidebar"
@@ -78,8 +83,12 @@ export default function UserLayout({ user, children }) {
         </button>
       )}
 
-      <div className={`main ${!sidebarOpen && isDesktop ? "main-sidebar-closed" : ""}`}>
-        <Topbar user={user} onLogout={handleLogout} />
+      <div className="main">
+        <Topbar
+          user={user}
+          onLogout={handleLogout}
+          onToggleSidebar={toggleSidebar}
+        />
         <div className="content">{children}</div>
       </div>
     </div>

@@ -1,13 +1,14 @@
-// src/components/Sidebar.jsx
-
 import { useNavigate, useLocation } from "react-router-dom";
 import {
-  FaTachometerAlt,
+  FaHome,
   FaFolderOpen,
   FaBalanceScale,
   FaUser,
+  FaCog,
+  FaSignOutAlt,
+  FaArchive,
 } from "react-icons/fa";
-import { FaAnglesLeft } from "react-icons/fa6";
+import { FaAnglesLeft, FaAnglesRight } from "react-icons/fa6";
 
 import "../styles/layout/sidebar.css";
 
@@ -17,6 +18,7 @@ export default function Sidebar({
   mobileOpen,
   onToggle,
   onCloseMobile,
+  onLogout,
 }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -25,25 +27,28 @@ export default function Sidebar({
 
   const itemsByRole = {
     admin: [
-      { label: "Dashboard", path: "/admin/dashboard", icon: <FaTachometerAlt /> },
+      { label: "Home", path: "/admin/dashboard", icon: <FaHome /> },
       { label: "Manage Users", path: "/admin/users", icon: <FaFolderOpen /> },
       { label: "User Monitor", path: "/admin/user-status", icon: <FaFolderOpen /> },
+      { label: "Legacy Cases", path: "/admin/legacy-cases", icon: <FaArchive /> },
       { label: "My Profile", path: "/my-profile", icon: <FaUser /> },
     ],
     prosecutor: [
-      { label: "Dashboard", path: "/dashboard", icon: <FaTachometerAlt /> },
+      { label: "Home", path: "/dashboard", icon: <FaHome /> },
+      { label: "Legacy Cases", path: "/legacy-cases", icon: <FaArchive /> },
       { label: "My Profile", path: "/my-profile", icon: <FaUser /> },
     ],
     staff: [
-      { label: "Dashboard", path: "/staff/dashboard", icon: <FaTachometerAlt /> },
+      { label: "Dashboard", path: "/staff/dashboard", icon: <FaHome /> },
       { label: "Intake Cases", path: "/staff/intake-cases", icon: <FaFolderOpen /> },
       { label: "Official Cases", path: "/staff/cases", icon: <FaBalanceScale /> },
-      { label: "My Profile", path: "/my-profile", icon: <FaUser /> },
+      { label: "Legacy Cases", path: "/staff/legacy-cases", icon: <FaArchive /> },
     ],
   };
 
   const items = itemsByRole[role] || [
-    { label: "Dashboard", path: "/dashboard", icon: <FaTachometerAlt /> },
+    { label: "Home", path: "/dashboard", icon: <FaHome /> },
+    { label: "Legacy Cases", path: "/legacy-cases", icon: <FaArchive /> },
     { label: "My Profile", path: "/my-profile", icon: <FaUser /> },
   ];
 
@@ -53,81 +58,120 @@ export default function Sidebar({
 
   function handleNavigate(path) {
     navigate(path);
+
     if (window.innerWidth <= 1000 && onCloseMobile) {
       onCloseMobile();
     }
   }
 
+  function handleLogoutClick() {
+    if (onLogout) onLogout();
+  }
+
   return (
     <aside
-      className={`sidebar ${
-        isOpen ? "sidebar-expanded" : "sidebar-hidden-desktop"
-      } ${mobileOpen ? "sidebar-mobile-open" : ""}`}
+      className={`sidebar ${isOpen ? "sidebar-expanded" : "sidebar-collapsed"} ${
+        mobileOpen ? "sidebar-mobile-open" : ""
+      }`}
     >
-      <div className="sidebar-top-row">
-        <div className="sidebar-office-header">
-          <div className="sidebar-doj-logo-wrap">
-            <img src="/doj-seal.jpg" alt="DOJ Logo" className="sidebar-doj-logo" />
-          </div>
-
-          <div className="sidebar-office-text">
-            <div className="sidebar-office-main">
-              DEPARTMENT OF JUSTICE
-            </div>
-            <div className="sidebar-office-sub">
-              PROSECUTOR’S OFFICE
-            </div>
-          </div>
-        </div>
-
+      {/* floating expand button only when collapsed */}
+      {!isOpen && (
         <button
           type="button"
-          className="sidebar-collapse-btn"
+          className="sidebar-expand-floating-btn"
           onClick={onToggle}
-          aria-label="Close sidebar"
-          title="Close sidebar"
+          aria-label="Expand sidebar"
+          title="Expand sidebar"
         >
-          <FaAnglesLeft />
+         <FaAnglesRight />
         </button>
-      </div>
+      )}
 
-      <div className="sidebar-header-card">
-        <div className="sidebar-header-avatar">
-          {user?.profile_pic ? (
-            <img
-              src={`http://127.0.0.1:5000/${user.profile_pic}?t=${Date.now()}`}
-              alt="Profile"
-              className="sidebar-profile-img"
-            />
-          ) : (
-            <span>{user?.first_name?.[0] || "U"}</span>
+      <div className="sidebar-shell">
+        <div className="sidebar-top">
+          <div className="sidebar-top-row">
+            <div className="sidebar-office-header">
+              
+                <img
+                  src="/doj-seal.jpg"
+                  alt="DOJ Logo"
+                  className="sidebar-doj-logo"
+                />
+              </div>
+
+              {isOpen && (
+                <div className="sidebar-office-text">
+                  <div className="sidebar-office-main">DEPARTMENT OF JUSTICE</div>
+                  <div className="sidebar-office-sub">PROSECUTOR’S OFFICE</div>
+                </div>
+              )}
+           
+
+            {isOpen && (
+              <button
+                type="button"
+                className="sidebar-collapse-btn"
+                onClick={onToggle}
+                aria-label="Collapse sidebar"
+                title="Collapse sidebar"
+              >
+                <FaAnglesLeft />
+              </button>
+            )}
+          </div>
+
+          {isOpen && (
+            <div className="sidebar-header-card">
+              <div className="sidebar-header-avatar">
+                {user?.profile_pic ? (
+                  <img
+                    src={`http://127.0.0.1:5000/${user.profile_pic}?t=${Date.now()}`}
+                    alt="Profile"
+                    className="sidebar-profile-img"
+                  />
+                ) : (
+                  <span>{user?.first_name?.[0] || "U"}</span>
+                )}
+              </div>
+
+              <div className="sidebar-header-name">
+                {user?.first_name} {user?.last_name}
+              </div>
+
+              <div className="sidebar-header-subtext">
+                {user?.email || user?.role}
+              </div>
+            </div>
           )}
         </div>
 
-        <div className="sidebar-header-name">
-          {user?.first_name} {user?.last_name}
-        </div>
+        <nav className="nav">
+          {items.map((it) => (
+            <button
+              key={it.path}
+              className={`nav-item ${isActive(it.path) ? "nav-item-active" : ""}`}
+              onClick={() => handleNavigate(it.path)}
+              title={!isOpen ? it.label : ""}
+            >
+              <span className="nav-icon">{it.icon}</span>
+              {isOpen && <span className="nav-label">{it.label}</span>}
+            </button>
+          ))}
+        </nav>
 
-        <div className="sidebar-header-subtext">
-          {user?.email || user?.role}
-        </div>
-      </div>
-
-      <nav className="nav">
-        {items.map((it) => (
+        <div className="sidebar-footer">
           <button
-            key={it.path}
-            className={`nav-item ${isActive(it.path) ? "nav-item-active" : ""}`}
-            onClick={() => handleNavigate(it.path)}
+            type="button"
+            className="sidebar-footer-btn sidebar-footer-btn-logout"
+            onClick={handleLogoutClick}
+            title="Log Out"
           >
-            
-            <span className="nav-label">{it.label}</span>
+            <span className="sidebar-footer-icon">
+              <FaSignOutAlt />
+            </span>
+            {isOpen && <span>Log Out</span>}
           </button>
-        ))}
-      </nav>
-
-      <div className="sidebar-footer">
-        <div className="small-muted">© {new Date().getFullYear()}</div>
+        </div>
       </div>
     </aside>
   );

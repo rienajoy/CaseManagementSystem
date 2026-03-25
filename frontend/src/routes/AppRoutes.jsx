@@ -21,6 +21,7 @@ import IntakeCases from "../pages/staff/IntakeCases.jsx";
 import IntakeCaseDetails from "../pages/staff/IntakeCaseDetails.jsx";
 import OfficialCases from "../pages/staff/OfficialCases.jsx";
 import OfficialCaseDetails from "../pages/staff/OfficialCaseDetails.jsx";
+import IntakeCasesPage from "../pages/staff/IntakeCasesPage";
 
 /* temporary placeholders for next pages
  * create these files next if they do not exist yet
@@ -125,13 +126,13 @@ export default function AppRoutes() {
         />
 
         <Route
-          path="/staff/intake-cases"
-          element={
-            <ProtectedRoute allowedRoles={["staff"]}>
-              <IntakeCases />
-            </ProtectedRoute>
-          }
-        />
+  path="/staff/intake-cases"
+  element={
+    <ProtectedRoute allowedRoles={["staff"]}>
+      <IntakeCasesPage />
+    </ProtectedRoute>
+  }
+/>
 
         <Route
           path="/staff/intake-cases/:intakeCaseId"
