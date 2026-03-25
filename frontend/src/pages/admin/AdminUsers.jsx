@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import {
   FiRefreshCw,
   FiLock,
@@ -30,6 +30,7 @@ import { getStoredUser, setStoredUser } from "../../utils/storage";
 
 export default function AdminUsers() {
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [user, setUser] = useState(getStoredUser());
 
@@ -37,6 +38,7 @@ export default function AdminUsers() {
   const [availablePerms, setAvailablePerms] = useState([]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState("");
+  const [msgType, setMsgType] = useState("");
 
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("all");
@@ -56,6 +58,8 @@ export default function AdminUsers() {
 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedDeleteUser, setSelectedDeleteUser] = useState(null);
+
+  const [highlightedUserId, setHighlightedUserId] = useState(null);
 
   const [editForm, setEditForm] = useState({
     first_name: "",
@@ -78,6 +82,7 @@ export default function AdminUsers() {
 
   const adminLevel = isAdminLevel(user);
   const superAdmin = isSuperAdmin(user);
+  const focusUserId = location.state?.focusUserId;
 
   useEffect(() => {
     async function init() {
@@ -111,6 +116,16 @@ export default function AdminUsers() {
 
     return () => clearInterval(interval);
   }, []);
+
+  function showSuccess(message) {
+    setMsg(message);
+    setMsgType("success");
+  }
+
+  function showError(message) {
+    setMsg(message);
+    setMsgType("error");
+  }
 
   function openEditModal(targetUser) {
     setSelectedEditUser(targetUser);
@@ -159,14 +174,15 @@ export default function AdminUsers() {
     if (!selectedEditUser) return;
 
     setMsg("");
+    setMsgType("");
 
     try {
       await api.put(`/admin/users/${selectedEditUser.user_id}`, editForm);
-      setMsg("User account updated successfully.");
+      showSuccess("User account updated successfully.");
       closeEditModal();
       await loadAll();
     } catch (e) {
-      setMsg(e?.response?.data?.message || "Failed to update user");
+      showError(e?.response?.data?.message || "Failed to update user");
     }
   }
 
@@ -174,27 +190,29 @@ export default function AdminUsers() {
     e.preventDefault();
 
     if (!selectedResetUser || !resetPasswordValue.trim()) {
-      setMsg("Please enter a new temporary password.");
+      showError("Please enter a new temporary password.");
       return;
     }
 
     setMsg("");
+    setMsgType("");
 
     try {
       await resetAdminUserPassword(selectedResetUser.user_id, {
         password: resetPasswordValue,
       });
 
-      setMsg("Password reset successfully.");
+      showSuccess("Password reset successfully.");
       closeResetPasswordModal();
       await loadAll();
     } catch (e) {
-      setMsg(e?.response?.data?.message || "Failed to reset password");
+      showError(e?.response?.data?.message || "Failed to reset password");
     }
   }
 
   async function loadAll() {
     setMsg("");
+    setMsgType("");
     setLoading(true);
 
     try {
@@ -204,17 +222,31 @@ export default function AdminUsers() {
         getUsersStatus(),
       ]);
 
-      setUsers(
-        (uRes.data || []).map((u) => ({
-          ...u,
-          permissions: Array.isArray(u.permissions) ? u.permissions : [],
-        }))
-      );
+      const normalizedUsers = (uRes.data || []).map((u) => ({
+        ...u,
+        permissions: Array.isArray(u.permissions) ? u.permissions : [],
+      }));
 
+      setUsers(normalizedUsers);
       setAvailablePerms(pRes.data || []);
       setStatusRows(sRes.data || []);
+
+      if (focusUserId) {
+        setHighlightedUserId(focusUserId);
+
+        setTimeout(() => {
+          const el = document.getElementById(`user-row-${focusUserId}`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            el.classList.add("highlighted-row");
+            setTimeout(() => {
+              el.classList.remove("highlighted-row");
+            }, 3000);
+          }
+        }, 80);
+      }
     } catch (e) {
-      setMsg(e?.response?.data?.message || "Failed to load users/permissions");
+      showError(e?.response?.data?.message || "Failed to load users/permissions");
     } finally {
       setLoading(false);
     }
@@ -223,16 +255,17 @@ export default function AdminUsers() {
   async function createUser(e) {
     e.preventDefault();
     setMsg("");
+    setMsgType("");
 
     if (form.role === "admin" && !superAdmin) {
-      setMsg("Only a super admin can create an admin account.");
+      showError("Only a super admin can create an admin account.");
       return;
     }
 
     try {
       await createAdminUser(form);
 
-      setMsg("User account successfully created.");
+      showSuccess("User account successfully created.");
 
       setForm({
         first_name: "",
@@ -246,29 +279,33 @@ export default function AdminUsers() {
       setShowCreateForm(false);
       await loadAll();
     } catch (e) {
-      setMsg(e?.response?.data?.message || "Failed to create user");
+      showError(e?.response?.data?.message || "Failed to create user");
     }
   }
 
   async function lockUser(user_id) {
     setMsg("");
+    setMsgType("");
 
     try {
       await lockAdminUser(user_id);
+      showSuccess("User account locked successfully.");
       await loadAll();
     } catch (e) {
-      setMsg(e?.response?.data?.message || "Failed to lock user");
+      showError(e?.response?.data?.message || "Failed to lock user");
     }
   }
 
   async function unlockUser(user_id) {
     setMsg("");
+    setMsgType("");
 
     try {
       await unlockAdminUser(user_id);
+      showSuccess("User account unlocked successfully.");
       await loadAll();
     } catch (e) {
-      setMsg(e?.response?.data?.message || "Failed to unlock user");
+      showError(e?.response?.data?.message || "Failed to unlock user");
     }
   }
 
@@ -276,14 +313,15 @@ export default function AdminUsers() {
     if (!selectedDeleteUser) return;
 
     setMsg("");
+    setMsgType("");
 
     try {
       await deleteAdminUser(selectedDeleteUser.user_id);
-      setMsg("User account deleted successfully.");
+      showSuccess("User account deleted successfully.");
       closeDeleteModal();
       await loadAll();
     } catch (e) {
-      setMsg(e?.response?.data?.message || "Failed to delete user");
+      showError(e?.response?.data?.message || "Failed to delete user");
     }
   }
 
@@ -295,17 +333,17 @@ export default function AdminUsers() {
     const isRegularAdmin = current?.role === "admin";
 
     if (!superAdmin) {
-      setMsg("Only a super admin can manage account permissions.");
+      showError("Only a super admin can manage account permissions.");
       return;
     }
 
     if (isSelf) {
-      setMsg("You cannot modify permissions for your own account.");
+      showError("You cannot modify permissions for your own account.");
       return;
     }
 
     if (!isRegularAdmin) {
-      setMsg("Permissions can only be managed for regular admin accounts.");
+      showError("Permissions can only be managed for regular admin accounts.");
       return;
     }
 
@@ -326,6 +364,7 @@ export default function AdminUsers() {
     if (!selectedUser) return;
 
     setMsg("");
+    setMsgType("");
 
     try {
       await updateAdminUserPermissions(selectedUser.user_id, {
@@ -340,14 +379,14 @@ export default function AdminUsers() {
         )
       );
 
-      setMsg("Permissions updated successfully.");
+      showSuccess("Permissions updated successfully.");
       setShowPermissionsModal(false);
       setSelectedUser(null);
       setSelectedPermissions([]);
 
       await loadAll();
     } catch (e) {
-      setMsg(e?.response?.data?.message || "Failed to update permissions");
+      showError(e?.response?.data?.message || "Failed to update permissions");
     }
   }
 
@@ -473,7 +512,15 @@ export default function AdminUsers() {
         </div>
       </div>
 
-      {msg && <div className="alert alert-info">{msg}</div>}
+      {msg && (
+        <div
+          className={`alert ${
+            msgType === "success" ? "alert-success" : "alert-error"
+          }`}
+        >
+          {msg}
+        </div>
+      )}
 
       <div className="manage-users-grid">
         {showCreateForm && (
@@ -692,26 +739,25 @@ export default function AdminUsers() {
                 ) : (
                   filteredUsers.map((u) => {
                     const currentUser = getStoredUser();
-const isSelf = currentUser?.user_id === u.user_id;
-const isAdminAccount = u.role === "admin";
-const isSuperAdminAccount = u.role === "super_admin";
+                    const isSelf = currentUser?.user_id === u.user_id;
+                    const isAdminAccount = u.role === "admin";
+                    const isSuperAdminAccount = u.role === "super_admin";
+                    const isProtectedAccount = isSuperAdminAccount;
 
-// Only super admin accounts should be protected from destructive actions
-const isProtectedAccount = isSuperAdminAccount;
+                    const canLockOrUnlock = !isSelf && !isProtectedAccount;
+                    const canDelete = !isSelf && !isProtectedAccount;
 
-// Super admin can manage regular admin accounts.
-// Nobody should manage their own account.
-const canLockOrUnlock = !isSelf && !isProtectedAccount;
-const canDelete = !isSelf && !isProtectedAccount;
-
-const canManagePermissions =
-  superAdmin && isAdminAccount && !isSelf;
-
-const liveStatus = getLiveStatus(u);
-const isLocked = liveStatus === "locked";
+                    const liveStatus = getLiveStatus(u);
+                    const isLocked = liveStatus === "locked";
 
                     return (
-                      <tr key={u.user_id}>
+                      <tr
+                        key={u.user_id}
+                        id={`user-row-${u.user_id}`}
+                        className={
+                          highlightedUserId === u.user_id ? "highlighted-row" : ""
+                        }
+                      >
                         <td>{u.user_id}</td>
 
                         <td>
@@ -784,17 +830,21 @@ const isLocked = liveStatus === "locked";
 
                         <td>
                           <div className="table-actions-row">
-                           {canLockOrUnlock && (
-  <button
-    className={`icon-action-btn ${
-      isLocked ? "icon-lock plain-icon-btn locked-state" : "icon-unlock plain-icon-btn unlocked-state"
-    }`}
-    onClick={() => (isLocked ? unlockUser(u.user_id) : lockUser(u.user_id))}
-    title={isLocked ? "Locked account" : "Active account"}
-  >
-    {isLocked ? <FiLock /> : <FiUnlock />}
-  </button>
-)}
+                            {canLockOrUnlock && (
+                              <button
+                                className={`icon-action-btn ${
+                                  isLocked
+                                    ? "icon-lock plain-icon-btn locked-state"
+                                    : "icon-unlock plain-icon-btn unlocked-state"
+                                }`}
+                                onClick={() =>
+                                  isLocked ? unlockUser(u.user_id) : lockUser(u.user_id)
+                                }
+                                title={isLocked ? "Locked account" : "Active account"}
+                              >
+                                {isLocked ? <FiLock /> : <FiUnlock />}
+                              </button>
+                            )}
 
                             <div className="table-action-group compact-group">
                               <button

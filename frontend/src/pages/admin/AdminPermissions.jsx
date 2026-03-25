@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FiShield, FiRefreshCw } from "react-icons/fi";
+import { FiShield, FiRefreshCw, FiArrowLeft } from "react-icons/fi";
 
 import api from "../../api";
 import {
@@ -119,6 +119,13 @@ export default function AdminPermissions() {
         : [...prev, permission]
     );
   }
+function selectAllPermissions() {
+  setSelectedPermissions([...availablePerms]);
+}
+
+function clearAllPermissions() {
+  setSelectedPermissions([]);
+}
 
   async function savePermissions() {
     if (!selectedAdmin) return;
@@ -176,6 +183,12 @@ export default function AdminPermissions() {
     (u) => !u.permissions || u.permissions.length === 0
   ).length;
 
+  const allPermissionsSelected =
+  availablePerms.length > 0 &&
+  selectedPermissions.length === availablePerms.length;
+
+const noPermissionsSelected = selectedPermissions.length === 0;
+
   return (
     <AdminLayout user={user}>
       <div className="welcome-block manage-users-top">
@@ -188,15 +201,24 @@ export default function AdminPermissions() {
           </div>
 
           <div className="manage-users-header-actions">
-            <button
-              type="button"
-              className={`refresh-icon-btn ${loading ? "loading" : ""}`}
-              onClick={loadAll}
-              title="Refresh"
-            >
-              <FiRefreshCw />
-            </button>
-          </div>
+  <button
+    type="button"
+    className="btn btn-light admin-back-btn"
+    onClick={() => navigate("/admin/dashboard")}
+  >
+    <FiArrowLeft />
+    <span>Back</span>
+  </button>
+
+  <button
+    type="button"
+    className={`refresh-icon-btn ${loading ? "loading" : ""}`}
+    onClick={loadAll}
+    title="Refresh"
+  >
+    <FiRefreshCw />
+  </button>
+</div>
         </div>
       </div>
 
@@ -331,13 +353,13 @@ export default function AdminPermissions() {
 
                     <td>
                       <button
-                        type="button"
-                        className="table-action-btn compact-btn"
-                        onClick={() => openPermissionsModal(u)}
-                      >
-                        <FiShield className="table-action-icon" />
-                        <span>Manage</span>
-                      </button>
+  type="button"
+  className="table-action-btn compact-btn manage-permissions-btn"
+  onClick={() => openPermissionsModal(u)}
+>
+  <FiShield className="table-action-icon manage-permissions-icon" />
+  <span>Manage</span>
+</button>
                     </td>
                   </tr>
                 ))
@@ -397,22 +419,42 @@ export default function AdminPermissions() {
                 </div>
               </div>
 
-              <div className="permissions-grid">
-                {availablePerms.map((perm) => {
-                  const checked = selectedPermissions.includes(perm);
+<div className="permissions-toolbar">
+  <button
+    type="button"
+    className="btn btn-light permissions-mini-btn"
+    onClick={selectAllPermissions}
+    disabled={allPermissionsSelected}
+  >
+    Select All
+  </button>
 
-                  return (
-                    <label key={perm} className="permission-item">
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => togglePermission(perm)}
-                      />
-                      <span>{formatPermissionLabel(perm)}</span>
-                    </label>
-                  );
-                })}
-              </div>
+  <button
+    type="button"
+    className="btn btn-light permissions-mini-btn"
+    onClick={clearAllPermissions}
+    disabled={noPermissionsSelected}
+  >
+    Clear All
+  </button>
+</div>
+
+<div className="permissions-grid">
+  {availablePerms.map((perm) => {
+    const checked = selectedPermissions.includes(perm);
+
+    return (
+      <label key={perm} className="permission-item">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={() => togglePermission(perm)}
+        />
+        <span>{formatPermissionLabel(perm)}</span>
+      </label>
+    );
+  })}
+</div>
 
               {availablePerms.length === 0 && (
                 <div className="empty">No permissions available.</div>

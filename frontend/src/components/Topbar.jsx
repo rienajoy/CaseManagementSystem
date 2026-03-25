@@ -1,79 +1,122 @@
 import { useEffect, useRef, useState } from "react";
+import { FaChevronDown, FaAngleDoubleLeft } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
-import "../styles/dashboard.css";
+import "../styles/layout/topbar.css";
 
 export default function Topbar({ user, onLogout, onToggleSidebar }) {
+  const [open, setOpen] = useState(false);
+  const dropdownRef = useRef(null);
   const navigate = useNavigate();
 
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef(null);
+  const firstName = user?.first_name || "User";
+  const fullName = `${user?.first_name || ""} ${user?.last_name || ""}`.trim();
+  const emailLabel = user?.email || "No email";
 
-  const profilePic = user?.profile_pic
-    ? `http://127.0.0.1:5000/${user.profile_pic}?t=${Date.now()}`
-    : null;
+  function toggleDropdown() {
+    setOpen((prev) => !prev);
+  }
 
   useEffect(() => {
-    function handleClickOutside(e) {
-      if (!menuRef.current) return;
-      if (!menuRef.current.contains(e.target)) setOpen(false);
+    function handleOutsideClick(event) {
+      if (!dropdownRef.current) return;
+      if (!dropdownRef.current.contains(event.target)) {
+        setOpen(false);
+      }
     }
 
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+    };
   }, []);
 
   return (
-    <header className="topbar">
-      <div className="topbar-left">
-        <button className="sidebar-toggle" onClick={onToggleSidebar}>
-          ☰
-        </button>
+    <header className="topbar topbar-modern">
+      <div className="topbar-left-wrap">
 
-        <img className="topbar-seal" src="/doj-seal.jpg" alt="DOJ Seal" />
-
-        <div className="topbar-brand">
-          <div className="topbar-title">DOJ Case Management System</div>
-          <div className="topbar-subtitle">Authorized Personnel Portal</div>
+        <div className="topbar-left">
+          <div className="topbar-greeting-block">
+            <div className="topbar-greeting-title">Hello, {firstName}!</div>
+            <div className="topbar-greeting-subtitle">
+              Ready to manage case records today?
+            </div>
+          </div>
         </div>
       </div>
 
-      <div className="topbar-right" ref={menuRef}>
-        <button className="user-chip" onClick={() => setOpen((s) => !s)}>
-          {profilePic ? (
-            <img className="user-pic" src={profilePic} alt="Profile" />
-          ) : (
-            <div className="user-pic-fallback">
-              {user?.first_name?.[0] || "U"}
+      <div className="topbar-right">
+        <div className="topbar-actions">
+          <button
+            type="button"
+            className="topbar-circle-btn"
+            aria-label="Notifications"
+            title="Notifications"
+          >
+            <span>🔔</span>
+          </button>
+        </div>
+
+        <div className="topbar-user-area" ref={dropdownRef}>
+          <button type="button" className="user-chip" onClick={toggleDropdown}>
+            {user?.profile_pic ? (
+              <img
+                className="user-pic"
+                src={`http://127.0.0.1:5000/${user.profile_pic}`}
+                alt={fullName || "User"}
+              />
+            ) : (
+              <div className="user-pic-fallback">
+                {user?.first_name?.[0] || "U"}
+              </div>
+            )}
+
+            <div className="user-meta">
+              <span className="user-name">{fullName || "User"}</span>
+              <span className="user-email">{emailLabel}</span>
+            </div>
+
+            <span className="user-caret">
+              <FaChevronDown />
+            </span>
+          </button>
+
+          {open && (
+            <div className="dropdown">
+              <button
+                type="button"
+                className="dropdown-item"
+                onClick={() => {
+                  setOpen(false);
+                  navigate("/my-profile");
+                }}
+              >
+                My Profile
+              </button>
+
+              <button
+                type="button"
+                className="dropdown-item"
+                onClick={() => {
+                  setOpen(false);
+                  navigate("/settings");
+                }}
+              >
+                Settings
+              </button>
+
+              <button
+                type="button"
+                className="dropdown-item danger"
+                onClick={() => {
+                  setOpen(false);
+                  onLogout();
+                }}
+              >
+                Logout
+              </button>
             </div>
           )}
-
-          <div className="user-meta">
-            <div className="user-name">
-              {user?.first_name} {user?.last_name}
-            </div>
-            <div className="user-role">{user?.role}</div>
-          </div>
-
-          <div className="user-caret">▾</div>
-        </button>
-
-        {open && (
-  <div className="dropdown">
-    <button
-  className="dropdown-item"
-  onClick={() => navigate("/settings")}
->
-  Settings
-</button>
-
-    <button
-      className="dropdown-item danger"
-      onClick={onLogout}
-    >
-      Logout
-    </button>
-  </div>
-)}
+        </div>
       </div>
     </header>
   );

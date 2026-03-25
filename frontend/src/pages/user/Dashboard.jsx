@@ -1,3 +1,5 @@
+//src/pages/user/Dashboard.jsx
+
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -31,6 +33,10 @@ export default function Dashboard() {
         if (isAdminLevel(res.data)) {
           navigate("/admin/dashboard");
         }
+        if (isStaff(res.data)) {
+      navigate("/staff/dashboard");
+      return;
+    }
       } catch (err) {
         console.error("Failed to refresh user profile", err);
       }
@@ -46,6 +52,7 @@ export default function Dashboard() {
   if (isAdminLevel(user)) {
     return <div style={{ padding: 20 }}>Redirecting to admin dashboard...</div>;
   }
+  
 
   const quickActions = [
     { label: "My Profile", onClick: () => navigate("/my-profile") },

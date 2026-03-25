@@ -16,6 +16,18 @@ export default function Settings() {
 
   const [settings, setSettings] = useState(getAppSettings());
   const [msg, setMsg] = useState("");
+  const [showProfilePicModal, setShowProfilePicModal] = useState(false);
+
+
+  function openProfilePicModal() {
+  setShowProfilePicModal(true);
+}
+
+function closeProfilePicModal() {
+  setShowProfilePicModal(false);
+  setPreview("");
+  setFile(null);
+}
 
   function handleChange(key, value) {
     setSettings((prev) => ({

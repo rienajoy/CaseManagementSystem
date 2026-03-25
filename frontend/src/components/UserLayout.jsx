@@ -6,12 +6,15 @@ import { useNavigate } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
 import { logout } from "../auth";
-import { getAppSettings } from "../utils/appSettings";
+
+import "../styles/layout/app-shell.css";
 
 export default function UserLayout({ user, children }) {
   const navigate = useNavigate();
 
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(window.innerWidth > 1000);
 
   function handleLogout() {
     logout();
@@ -19,51 +22,64 @@ export default function UserLayout({ user, children }) {
   }
 
   function toggleSidebar() {
+    if (window.innerWidth <= 1000) {
+      setMobileSidebarOpen((prev) => !prev);
+      return;
+    }
+
     setSidebarOpen((prev) => !prev);
   }
 
-  function closeSidebar() {
-    setSidebarOpen(false);
+  function closeMobileSidebar() {
+    setMobileSidebarOpen(false);
   }
 
   useEffect(() => {
-    function syncSettings() {
-      const settings = getAppSettings();
-      const isMobile = window.innerWidth <= 1000;
+    function handleResize() {
+      const desktop = window.innerWidth > 1000;
+      setIsDesktop(desktop);
 
-      if (isMobile) {
-        setSidebarOpen(settings.sidebarDefault === "expanded");
+      if (!desktop) {
+        setSidebarOpen(true);
       } else {
-        setSidebarOpen(false);
+        setMobileSidebarOpen(false);
       }
     }
 
-    syncSettings();
-
-    window.addEventListener("resize", syncSettings);
-    window.addEventListener("app-settings-changed", syncSettings);
-
+    window.addEventListener("resize", handleResize);
     return () => {
-      window.removeEventListener("resize", syncSettings);
-      window.removeEventListener("app-settings-changed", syncSettings);
+      window.removeEventListener("resize", handleResize);
     };
   }, []);
 
   return (
     <div className="app-shell">
-      {sidebarOpen && (
-        <div className="sidebar-overlay" onClick={closeSidebar} />
+      {mobileSidebarOpen && (
+        <div className="sidebar-overlay" onClick={closeMobileSidebar} />
       )}
 
-      <Sidebar user={user} open={sidebarOpen} onClose={closeSidebar} />
+      <Sidebar
+        user={user}
+        isOpen={sidebarOpen}
+        mobileOpen={mobileSidebarOpen}
+        onToggle={toggleSidebar}
+        onCloseMobile={closeMobileSidebar}
+      />
 
-      <div className="main">
-        <Topbar
-          user={user}
-          onLogout={handleLogout}
-          onToggleSidebar={toggleSidebar}
-        />
+      {!sidebarOpen && isDesktop && (
+        <button
+          type="button"
+          className="sidebar-docked-open-btn"
+          onClick={toggleSidebar}
+          aria-label="Open sidebar"
+          title="Open sidebar"
+        >
+          »
+        </button>
+      )}
 
+      <div className={`main ${!sidebarOpen && isDesktop ? "main-sidebar-closed" : ""}`}>
+        <Topbar user={user} onLogout={handleLogout} />
         <div className="content">{children}</div>
       </div>
     </div>

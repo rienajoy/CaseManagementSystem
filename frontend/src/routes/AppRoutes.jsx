@@ -1,4 +1,4 @@
-// src/routes/AppRoutes.jsx
+// src/routes/AppRoutes.js
 
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
@@ -9,40 +9,45 @@ import ChangePassword from "../pages/auth/ChangePassword";
 
 import Dashboard from "../pages/user/Dashboard";
 import MyProfile from "../pages/user/MyProfile";
+import Settings from "../pages/user/Settings";
 
 import AdminDashboard from "../pages/admin/AdminDashboard";
 import AdminUsers from "../pages/admin/AdminUsers";
 import AdminPermissions from "../pages/admin/AdminPermissions";
 import UserStatus from "../pages/admin/UserStatus";
 
+import StaffDashboard from "../pages/staff/StaffDashboard.jsx";
+import IntakeCases from "../pages/staff/IntakeCases.jsx";
+import IntakeCaseDetails from "../pages/staff/IntakeCaseDetails.jsx";
+import OfficialCases from "../pages/staff/OfficialCases.jsx";
+import OfficialCaseDetails from "../pages/staff/OfficialCaseDetails.jsx";
+
+/* temporary placeholders for next pages
+ * create these files next if they do not exist yet
+ */
+import LegacyCases from "../pages/staff/LegacyCases.jsx";
+import LegacyCaseDetails from "../pages/staff/LegacyCaseDetails.jsx";
+import StaffAuditLogs from "../pages/staff/StaffAuditLogs.jsx";
+
+import ProsecutorDashboard from "../pages/prosecutor/ProsecutorDashboard";
+
 import Unauthorized from "../pages/system/Unauthorized";
+import NotFound from "../pages/system/NotFound";
 
 import { ADMIN_ROLES } from "../utils/roles";
-
-import NotFound from "../pages/system/NotFound";
-import Settings from "../pages/user/Settings";
 
 export default function AppRoutes() {
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<LoginPage />} />
-        <Route path="*" element={<NotFound />} />
+        <Route path="/unauthorized" element={<Unauthorized />} />
 
         <Route
           path="/change-password"
           element={
             <ProtectedRoute>
               <ChangePassword />
-            </ProtectedRoute>
-          }
-        />
-
-        <Route
-          path="/settings"
-          element={
-            <ProtectedRoute>
-              <Settings />
             </ProtectedRoute>
           }
         />
@@ -61,6 +66,15 @@ export default function AppRoutes() {
           element={
             <ProtectedRoute>
               <MyProfile />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <Settings />
             </ProtectedRoute>
           }
         />
@@ -101,7 +115,88 @@ export default function AppRoutes() {
           }
         />
 
-        <Route path="/unauthorized" element={<Unauthorized />} />
+        <Route
+          path="/staff/dashboard"
+          element={
+            <ProtectedRoute allowedRoles={["staff"]}>
+              <StaffDashboard />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/staff/intake-cases"
+          element={
+            <ProtectedRoute allowedRoles={["staff"]}>
+              <IntakeCases />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/staff/intake-cases/:intakeCaseId"
+          element={
+            <ProtectedRoute allowedRoles={["staff"]}>
+              <IntakeCaseDetails />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/staff/cases"
+          element={
+            <ProtectedRoute allowedRoles={["staff"]}>
+              <OfficialCases />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/staff/cases/:caseId"
+          element={
+            <ProtectedRoute allowedRoles={["staff"]}>
+              <OfficialCaseDetails />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/staff/legacy-cases"
+          element={
+            <ProtectedRoute allowedRoles={["staff"]}>
+              <LegacyCases />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/staff/legacy-cases/:caseId"
+          element={
+            <ProtectedRoute allowedRoles={["staff"]}>
+              <LegacyCaseDetails />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/staff/audit-logs"
+          element={
+            <ProtectedRoute allowedRoles={["staff"]}>
+              <StaffAuditLogs />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/prosecutor/dashboard"
+          element={
+            <ProtectedRoute allowedRoles={["prosecutor"]}>
+              <ProsecutorDashboard />
+            </ProtectedRoute>
+          }
+        />
+
+        <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>
   );

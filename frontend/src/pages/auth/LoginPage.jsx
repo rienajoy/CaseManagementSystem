@@ -9,7 +9,31 @@ import {
   clearRememberedEmail,
   setStoredToken,
   setStoredUser,
+  clearStoredToken,
+  clearStoredUser,
 } from "../../utils/storage";
+
+function getRedirectPath(user) {
+  if (!user) return "/";
+
+  if (user.must_change_password) {
+    return "/change-password";
+  }
+
+  if (user.role === "admin" || user.role === "super_admin") {
+    return "/admin/dashboard";
+  }
+
+  if (user.role === "staff") {
+    return "/staff/dashboard";
+  }
+
+  if (user.role === "prosecutor") {
+    return "/prosecutor/dashboard";
+  }
+
+  return "/dashboard";
+}
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -24,6 +48,9 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    clearStoredToken();
+    clearStoredUser();
+
     const savedEmail = getRememberedEmail();
     if (savedEmail) {
       setEmail(savedEmail);
@@ -48,12 +75,7 @@ export default function LoginPage() {
       setStoredToken(res.data.token);
       setStoredUser(res.data.user);
 
-      if (res.data.user.must_change_password) {
-        navigate("/change-password");
-        return;
-      }
-
-      navigate("/dashboard");
+      navigate(getRedirectPath(res.data.user), { replace: true });
     } catch (err) {
       setError(err?.response?.data?.message || "Login failed");
     } finally {

@@ -1,0 +1,89 @@
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  background: #f7efe6;
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: #111827;
+}
+
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+  z-index: 30;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-width: 0;
+}
+
+.content {
+  position: relative;
+  padding: 18px 22px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.content::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("/doj-seal.png");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 520px;
+  opacity: 0.025;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.content > * {
+  position: relative;
+  z-index: 1;
+}
+
+@media (max-width: 1000px) {
+  .content {
+    padding: 16px;
+  }
+}
+
+.main-sidebar-closed {
+  margin-left: 0;
+}
+
+.sidebar-docked-open-btn {
+  position: fixed;
+  left: 10px;
+  top: 18px;
+  min-width: 18px;
+  height: 22px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: #9c2b3a;
+  cursor: pointer;
+  z-index: 45;
+  font-size: 22px;
+  font-weight: 800;
+  display: grid;
+  place-items: center;
+  transition: transform 0.18s ease, color 0.18s ease;
+}
+
+.sidebar-docked-open-btn:hover {
+  color: #841428;
+  transform: translateX(1px);
+}
+
+@media (max-width: 1000px) {
+  .sidebar-docked-open-btn {
+    display: none;
+  }
+}
