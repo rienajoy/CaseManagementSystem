@@ -67,6 +67,8 @@ from app.services.staff.summary_service import (
     get_latest_intake_document_type,
     derive_intake_status_from_summary,
     get_latest_preferred_document,
+    get_dashboard_offense_chart_data,
+    get_latest_saved_reviewed_data_for_intake_case,
 )
 
 from app.services.staff.intake_document_service import (
@@ -78,6 +80,8 @@ from app.services.staff.intake_document_service import (
     get_post_review_intake_status,
     assign_intake_document_versioning,
     assign_case_document_versioning,
+    detect_pipeline_document_type,
+    validate_initiating_document_match,
 )
 
 from app.services.staff.tracker_service import (
@@ -98,6 +102,8 @@ from app.services.staff.compliance_service import (
 from app.services.staff.audit_service import log_staff_action
 from app.serializers.staff_serializers import serialize_staff_audit_log
 
+from flask import send_from_directory
+
 from app.constants.staff_case_constants import (
     ALLOWED_CASE_TYPES,
     INV_FOLLOWING_DOCUMENT_TYPES,
@@ -113,8 +119,75 @@ from app.constants.staff_case_constants import (
 
 staff_bp = Blueprint("staff_bp", __name__, url_prefix="/staff")
 
+
+@staff_bp.route("/uploads/<path:filename>", methods=["GET"])
+@role_required(["staff"])
+def serve_uploaded_file(filename):
+    uploads_root = os.path.abspath("uploads")
+    return send_from_directory(uploads_root, filename, as_attachment=False)
+
+
 UPLOAD_BASE_FOLDER = "uploads"
 INTAKE_CASE_UPLOAD_FOLDER = os.path.join(UPLOAD_BASE_FOLDER, "intake_cases")
+
+PRE_INTAKE_STATUS = "pre_intake"
+DRAFT_STATUS = "draft"
+NEEDS_REVIEW_STATUS = "needs_review"
+
+
+def normalize_case_flow_status(value):
+    return str(value or "").strip().lower()
+
+
+def is_pre_intake_status(value):
+    return normalize_case_flow_status(value) == PRE_INTAKE_STATUS
+
+
+def is_draft_status(value):
+    return normalize_case_flow_status(value) == DRAFT_STATUS
+
+
+def require_initiating_docket_number(reviewed_data):
+    docket_number = (reviewed_data or {}).get("docket_number")
+    if docket_number is None:
+        return False
+    if isinstance(docket_number, str):
+        return bool(docket_number.strip())
+    return bool(docket_number)
+
+
+def determine_intake_status_after_document_change(db, intake_case):
+    """
+    Option B workflow status rules:
+    - case type selected only -> pre_intake
+    - initiating document uploaded/extracted but not fully confirmed -> needs_review
+    - explicit cancel/save-draft -> draft
+    - official intake happens only at confirm step
+    """
+    initiating_doc = get_existing_initiating_document(db, intake_case.id, intake_case.case_type)
+    pending_review_docs = get_unreviewed_intake_documents(db, intake_case.id)
+
+    if not initiating_doc:
+        return PRE_INTAKE_STATUS
+
+    if not initiating_doc.is_reviewed:
+        return NEEDS_REVIEW_STATUS
+
+    if pending_review_docs:
+        return NEEDS_REVIEW_STATUS
+
+    summary = summarize_intake_case_from_documents(db, intake_case.id) or {}
+    derived_status = derive_intake_status_from_summary(
+        intake_case.intake_status,
+        summary,
+        case_type=intake_case.case_type,
+    )
+
+    if derived_status in {None, "", PRE_INTAKE_STATUS, DRAFT_STATUS, NEEDS_REVIEW_STATUS, "for_confirmation"}:
+        return "active"
+
+    return derived_status
+
 
 
 def sort_intake_case_views(items, sort_by="created_at", sort_dir="desc"):
@@ -133,72 +206,7 @@ def sort_intake_case_views(items, sort_by="created_at", sort_dir="desc"):
 
     return sorted(items, key=sortable_value, reverse=reverse)
 
-def normalize_offense_label(value):
-    if value is None:
-        return None
 
-    text = str(value).strip()
-    if not text:
-        return None
-
-    return " ".join(text.split())
-
-
-def split_offense_values(value):
-    if value is None:
-        return []
-
-    # support list values too
-    if isinstance(value, list):
-        raw_items = value
-    else:
-        # split by comma only if daghan gyud
-        raw_items = str(value).split(",")
-
-    cleaned = []
-    for item in raw_items:
-        normalized = normalize_offense_label(item)
-        if normalized:
-            cleaned.append(normalized)
-
-    return cleaned
-
-
-def build_dashboard_offense_chart_data(db, intake_cases, official_cases):
-    counter = Counter()
-
-    # Intake cases
-    for intake_case in intake_cases:
-        # optional: skip converted intake para dili ma-double count
-        if intake_case.converted_case_id:
-            continue
-
-        extracted = intake_case.extracted_data or {}
-
-        # fallback: compute from documents if empty or invalid
-        if not isinstance(extracted, dict) or not extracted.get("offense_or_violation"):
-            extracted = summarize_intake_case_from_documents(db, intake_case.id) or {}
-
-        raw_offense = None
-        if isinstance(extracted, dict):
-            raw_offense = (
-                extracted.get("offense_or_violation")
-                or extracted.get("offense")
-                or extracted.get("violation")
-            )
-
-        for offense in split_offense_values(raw_offense):
-            counter[offense] += 1
-
-    # Official cases
-    for case in official_cases:
-        for offense in split_offense_values(case.offense_or_violation):
-            counter[offense] += 1
-
-    return [
-        {"name": name, "total": total}
-        for name, total in counter.most_common()
-    ]
 @staff_bp.route("/prosecutors", methods=["GET"])
 @role_required(["staff"])
 def list_prosecutors():
@@ -262,7 +270,7 @@ def create_intake_case():
 
         intake_case = IntakeCase(
             case_type=case_type,
-            intake_status="draft",
+            intake_status=PRE_INTAKE_STATUS,
             review_notes=review_notes,
             created_by=current_user_id,
             received_by=current_user_id,
@@ -275,7 +283,7 @@ def create_intake_case():
         log_staff_action(
             db,
             user_id=current_user_id,
-            action="intake_case_created",
+            action="intake_case_precreated",
             entity_type="intake_case",
             entity_id=intake_case.id,
             intake_case_id=intake_case.id,
@@ -289,7 +297,7 @@ def create_intake_case():
         db.refresh(intake_case)
 
         return success_response(
-            "Intake case created successfully.",
+            "Intake case workflow initialized successfully.",
             data={"intake_case": build_intake_case_view(db, intake_case)},
             status_code=201,
         )
@@ -298,7 +306,7 @@ def create_intake_case():
         db.rollback()
         current_app.logger.exception("create_intake_case failed")
         return error_response(
-            "Failed to create intake case.",
+            "Failed to initialize intake case workflow.",
             errors=[str(e)],
             status_code=500,
         )
@@ -336,31 +344,69 @@ def list_intake_cases():
         intake_cases = query.order_by(IntakeCase.created_at.desc()).all()
         all_views = [build_intake_case_view(db, row) for row in intake_cases]
 
-        official_statuses = {
-            "active",
-            "awaiting_compliance",
-            "under_prosecutor_review",
-            "resolved_dismissed",
-            "resolved_for_filing",
-            "information_filed",
-            "ready_for_conversion",
-            "converted",
-        }
+        def normalize(value):
+            return str(value or "").strip().lower()
 
-        if include_drafts:
-            visible_views = all_views
-        else:
+        def is_pre_intake_case(row):
+            status = normalize(row.get("intake_status"))
+            return status == "pre_intake"
+
+        def is_draft_stage_case(row):
+            status = normalize(row.get("intake_status"))
+            return status in {"draft", "needs_review", "for_confirmation"}
+
+        def is_dismissed_case(row):
+            status = normalize(row.get("intake_status"))
+            prosecution = normalize(row.get("prosecution_result"))
+            prosecution_label = normalize(row.get("prosecution_result_label"))
+
+            return (
+                status == "resolved_dismissed"
+                or prosecution in {"dismissed", "without_probable_cause", "no_probable_cause"}
+                or prosecution_label in {"dismissed", "without probable cause", "no probable cause"}
+            )
+
+        def is_official_visible_case(row):
+            status = normalize(row.get("intake_status"))
+            return (
+                status not in {"", "pre_intake", "draft", "needs_review", "for_confirmation"}
+                and not is_dismissed_case(row)
+            )
+
+        # ---------------------------
+        # TAB FILTERING
+        # ---------------------------
+        if tab == "drafts":
+            visible_views = [row for row in all_views if is_draft_stage_case(row)]
+
+        elif tab == "dismissed":
+            visible_views = [row for row in all_views if is_dismissed_case(row)]
+
+        elif tab == "inv":
             visible_views = [
                 row for row in all_views
-                if row.get("intake_status") in official_statuses
+                if normalize(row.get("case_type")) == "inv" and is_official_visible_case(row)
             ]
 
-        if tab == "dismissed":
+        elif tab == "inq":
             visible_views = [
-                row for row in visible_views
-                if row.get("intake_status") == "resolved_dismissed"
+                row for row in all_views
+                if normalize(row.get("case_type")) == "inq" and is_official_visible_case(row)
             ]
 
+        else:  # all
+            visible_views = [row for row in all_views if is_official_visible_case(row)]
+
+        # Option B:
+        # drafts / needs_review / for_confirmation should NEVER be mixed into official tabs
+        # so keep include_drafts disabled for tab=all behavior
+        if include_drafts and tab == "all":
+            visible_views = [row for row in all_views if is_official_visible_case(row)]
+
+
+        # ---------------------------
+        # EXTRA FILTERS
+        # ---------------------------
         if intake_status:
             visible_views = [
                 row for row in visible_views
@@ -399,6 +445,7 @@ def list_intake_cases():
             def matches_search(row):
                 searchable_values = [
                     row.get("intake_case_id"),
+                    row.get("intake_id"),
                     row.get("docket_number"),
                     row.get("case_number"),
                     row.get("case_title"),
@@ -415,6 +462,9 @@ def list_intake_cases():
 
             visible_views = [row for row in visible_views if matches_search(row)]
 
+        # ---------------------------
+        # SORTING
+        # ---------------------------
         allowed_sort_fields = {
             "created_at",
             "updated_at",
@@ -464,15 +514,20 @@ def list_intake_cases():
                 },
                 "counts": {
                     "all_filtered": len(visible_views),
-                    "inv": len([row for row in visible_views if row.get("case_type") == "INV"]),
-                    "inq": len([row for row in visible_views if row.get("case_type") == "INQ"]),
+                    "all": len([row for row in all_views if is_official_visible_case(row)]),
+                    "inv": len([
+                        row for row in all_views
+                        if normalize(row.get("case_type")) == "inv" and is_official_visible_case(row)
+                    ]),
+                    "inq": len([
+                        row for row in all_views
+                        if normalize(row.get("case_type")) == "inq" and is_official_visible_case(row)
+                    ]),
                     "dismissed": len([
-                        row for row in visible_views
-                        if row.get("intake_status") == "resolved_dismissed"
+                        row for row in all_views if is_dismissed_case(row)
                     ]),
                     "drafts": len([
-                        row for row in all_views
-                        if row.get("intake_status") in {"draft", "needs_review", "for_confirmation"}
+                        row for row in all_views if is_draft_stage_case(row)
                     ]),
                 },
                 "pagination": paginated["pagination"],
@@ -492,6 +547,91 @@ def list_intake_cases():
         db.close()
 
 
+
+@staff_bp.route("/intake-cases/<int:intake_case_id>/save-draft", methods=["POST"])
+@role_required(["staff"])
+def save_intake_case_as_draft(intake_case_id):
+    db = SessionLocal()
+
+    try:
+        current_user = get_current_user()
+        if not current_user:
+            return error_response("Unauthorized", status_code=401)
+        current_user_id = current_user.user_id
+
+        intake_case = db.query(IntakeCase).filter(IntakeCase.id == intake_case_id).first()
+        if not intake_case:
+            return error_response("Intake case not found.", status_code=404)
+
+        if intake_case.converted_case_id:
+            return error_response(
+                "Cannot save a converted intake case as draft.",
+                status_code=400,
+            )
+
+        old_values = {
+            "intake_status": intake_case.intake_status,
+            "review_notes": intake_case.review_notes,
+        }
+
+        initiating_doc = get_existing_initiating_document(db, intake_case.id, intake_case.case_type)
+        if not initiating_doc:
+            return error_response(
+                "Cannot save as draft yet.",
+                errors=["An initiating document must be uploaded first."],
+                status_code=400,
+            )
+
+        extracted_payload = getattr(initiating_doc, "extracted_data", None)
+        if not extracted_payload:
+            return error_response(
+                "Cannot save as draft yet.",
+                errors=["The initiating document must be extracted first."],
+                status_code=400,
+            )
+
+        payload = request.get_json(silent=True) or {}
+        intake_case.review_notes = payload.get("review_notes", intake_case.review_notes)
+        intake_case.extracted_data = summarize_intake_case_from_documents(db, intake_case.id) or {}
+        intake_case.intake_status = DRAFT_STATUS
+
+        sync_missing_document_trackers(db, intake_case, current_user_id)
+
+        log_staff_action(
+            db,
+            user_id=current_user_id,
+            action="intake_case_saved_as_draft",
+            entity_type="intake_case",
+            entity_id=intake_case.id,
+            intake_case_id=intake_case.id,
+            old_values=old_values,
+            new_values={
+                "intake_status": intake_case.intake_status,
+                "review_notes": intake_case.review_notes,
+            },
+        )
+
+        db.commit()
+        db.refresh(intake_case)
+
+        return success_response(
+            "Intake case saved as draft successfully.",
+            data={"intake_case": build_intake_case_view(db, intake_case)},
+            status_code=200,
+        )
+
+    except Exception as e:
+        db.rollback()
+        current_app.logger.exception("save_intake_case_as_draft failed")
+        return error_response(
+            "Failed to save intake case as draft.",
+            errors=[str(e)],
+            status_code=500,
+        )
+    finally:
+        db.close()
+
+
 @staff_bp.route("/intake-cases/<int:intake_case_id>", methods=["GET"])
 @role_required(["staff"])
 def get_intake_case(intake_case_id):
@@ -501,7 +641,8 @@ def get_intake_case(intake_case_id):
         current_user = get_current_user()
         if not current_user:
             return error_response("Unauthorized", status_code=401)
-        current_user_id = current_user.user_id
+
+        current_user_id = getattr(current_user, "user_id", None) or getattr(current_user, "id", None)
 
         intake_case = db.query(IntakeCase).filter(IntakeCase.id == intake_case_id).first()
         if not intake_case:
@@ -523,38 +664,151 @@ def get_intake_case(intake_case_id):
             serialize_intake_case_document(db, doc) for doc in documents
         ]
 
-        summary = summarize_intake_case_from_documents(db, intake_case.id)
-        intake_case.extracted_data = summary
-        sync_missing_document_trackers(db, intake_case, current_user_id)
-        db.commit()
+        summary = {}
+        try:
+            summary = summarize_intake_case_from_documents(db, intake_case.id) or {}
+        except Exception as e:
+            current_app.logger.exception("summarize_intake_case_from_documents failed")
+            summary = {}
 
-        trackers = (
-            db.query(IntakeDocumentTracker)
-            .filter(IntakeDocumentTracker.intake_case_id == intake_case.id)
-            .order_by(IntakeDocumentTracker.created_at.asc())
-            .all()
-        )
+        try:
+            intake_case.extracted_data = summary
+            db.flush()
+        except Exception as e:
+            current_app.logger.exception("setting intake_case.extracted_data failed")
+            db.rollback()
 
-        compliance_items = (
-            db.query(IntakeComplianceItem)
-            .filter(IntakeComplianceItem.intake_case_id == intake_case.id)
-            .order_by(IntakeComplianceItem.created_at.asc())
-            .all()
-        )
+            intake_case = db.query(IntakeCase).filter(IntakeCase.id == intake_case_id).first()
+            documents = (
+                db.query(IntakeCaseDocument)
+                .filter(IntakeCaseDocument.intake_case_id == intake_case_id)
+                .order_by(IntakeCaseDocument.created_at.asc())
+                .all()
+            )
+            latest_documents = [
+                doc for doc in documents
+                if getattr(doc, "is_latest", False)
+            ]
+            document_history = [
+                serialize_intake_case_document(db, doc) for doc in documents
+            ]
+
+        try:
+            if current_user_id:
+                sync_missing_document_trackers(db, intake_case, current_user_id)
+                db.flush()
+        except Exception as e:
+            current_app.logger.exception("sync_missing_document_trackers failed")
+            db.rollback()
+
+            intake_case = db.query(IntakeCase).filter(IntakeCase.id == intake_case_id).first()
+            documents = (
+                db.query(IntakeCaseDocument)
+                .filter(IntakeCaseDocument.intake_case_id == intake_case_id)
+                .order_by(IntakeCaseDocument.created_at.asc())
+                .all()
+            )
+            latest_documents = [
+                doc for doc in documents
+                if getattr(doc, "is_latest", False)
+            ]
+            document_history = [
+                serialize_intake_case_document(db, doc) for doc in documents
+            ]
+
+        try:
+            db.commit()
+        except Exception as e:
+            current_app.logger.exception("commit failed in get_intake_case")
+            db.rollback()
+
+            intake_case = db.query(IntakeCase).filter(IntakeCase.id == intake_case_id).first()
+            documents = (
+                db.query(IntakeCaseDocument)
+                .filter(IntakeCaseDocument.intake_case_id == intake_case_id)
+                .order_by(IntakeCaseDocument.created_at.asc())
+                .all()
+            )
+            latest_documents = [
+                doc for doc in documents
+                if getattr(doc, "is_latest", False)
+            ]
+            document_history = [
+                serialize_intake_case_document(db, doc) for doc in documents
+            ]
+
+        trackers = []
+        try:
+            trackers = (
+                db.query(IntakeDocumentTracker)
+                .filter(IntakeDocumentTracker.intake_case_id == intake_case.id)
+                .order_by(IntakeDocumentTracker.created_at.asc())
+                .all()
+            )
+        except Exception as e:
+            current_app.logger.exception("loading trackers failed")
+            trackers = []
+
+        compliance_items = []
+        try:
+            compliance_items = (
+                db.query(IntakeComplianceItem)
+                .filter(IntakeComplianceItem.intake_case_id == intake_case.id)
+                .order_by(IntakeComplianceItem.created_at.asc())
+                .all()
+            )
+        except Exception as e:
+            current_app.logger.exception("loading compliance items failed")
+            compliance_items = []
+
+        checklist = []
+        try:
+            checklist = build_initial_checklist(db, intake_case, summary or {})
+        except Exception as e:
+            current_app.logger.exception("build_initial_checklist failed")
+            checklist = []
+
+        intake_case_view = {}
+        try:
+            intake_case_view = build_intake_case_view(db, intake_case)
+        except Exception as e:
+            current_app.logger.exception("build_intake_case_view failed")
+            intake_case_view = {
+                "id": intake_case.id,
+                "intake_case_id": getattr(intake_case, "intake_case_id", None),
+                "case_type": getattr(intake_case, "case_type", None),
+                "case_title": getattr(intake_case, "case_title", None),
+                "docket_number": getattr(intake_case, "docket_number", None),
+                "case_number": getattr(intake_case, "case_number", None),
+                "intake_status": getattr(intake_case, "intake_status", None),
+                "intake_document_status": getattr(intake_case, "intake_document_status", None),
+                "prosecution_result": getattr(intake_case, "prosecution_result", None),
+                "assigned_prosecutor_id": getattr(intake_case, "assigned_prosecutor_id", None),
+                "court_branch": getattr(intake_case, "court_branch", None),
+                "offense_or_violation": getattr(intake_case, "offense_or_violation", None),
+                "date_filed": getattr(intake_case, "date_filed", None),
+                "filed_in_court_date": getattr(intake_case, "filed_in_court_date", None),
+                "resolution_date": getattr(intake_case, "resolution_date", None),
+                "complainants": [],
+                "respondents": [],
+                "review_flags": [],
+                "warnings": [],
+            }
 
         return success_response(
             "Intake case retrieved successfully.",
             data={
-                "intake_case": build_intake_case_view(db, intake_case),
+                "intake_case": intake_case_view,
                 "documents": [serialize_intake_case_document(db, doc) for doc in documents],
                 "latest_documents": [serialize_intake_case_document(db, doc) for doc in latest_documents],
                 "document_history": document_history,
-                "checklist": build_initial_checklist(db, intake_case, summary),
+                "checklist": checklist,
                 "document_trackers": [serialize_document_tracker(item) for item in trackers],
                 "compliance_items": [serialize_compliance_item(item) for item in compliance_items],
             },
             status_code=200,
         )
+
     except Exception as e:
         current_app.logger.exception("get_intake_case failed")
         return error_response(
@@ -616,7 +870,7 @@ def confirm_intake_case(intake_case_id):
 
         if not initiating_doc.is_reviewed:
             return error_response(
-                "Please review and save the initiating document before confirming the intake case.",
+                "Please review and confirm the initiating document before confirming the intake case.",
                 status_code=400,
             )
 
@@ -669,6 +923,13 @@ def confirm_intake_case(intake_case_id):
             else:
                 final_summary["case_title"] = f"{intake_case.case_type} Intake Case {intake_case.id}"
 
+        if not (final_summary.get("docket_number") and str(final_summary.get("docket_number")).strip()):
+            return error_response(
+                "Cannot confirm intake case without docket_number.",
+                errors=["The initiating document review must include docket_number."],
+                status_code=400,
+            )
+
         intake_case.extracted_data = final_summary
 
         derived_status = derive_intake_status_from_summary(
@@ -677,7 +938,7 @@ def confirm_intake_case(intake_case_id):
             case_type=intake_case.case_type,
         )
 
-        if derived_status in {None, "draft", "needs_review", "for_confirmation"}:
+        if derived_status in {None, PRE_INTAKE_STATUS, DRAFT_STATUS, NEEDS_REVIEW_STATUS, "for_confirmation"}:
             intake_case.intake_status = "active"
         else:
             intake_case.intake_status = derived_status
@@ -706,7 +967,7 @@ def confirm_intake_case(intake_case_id):
         db.refresh(intake_case)
 
         return success_response(
-            "Intake case confirmed successfully.",
+            "Intake case confirmed successfully and is now an official intake case.",
             data={
                 "intake_case": build_intake_case_view(db, intake_case),
             },
@@ -742,6 +1003,12 @@ def upload_intake_case_document(intake_case_id):
         intake_case = db.query(IntakeCase).filter(IntakeCase.id == intake_case_id).first()
         if not intake_case:
             return error_response("Intake case not found.", status_code=404)
+
+        if intake_case.converted_case_id:
+            return error_response(
+                "Cannot upload documents to a converted intake case.",
+                status_code=400,
+            )
 
         if "document" not in request.files:
             return error_response(
@@ -822,6 +1089,38 @@ def upload_intake_case_document(intake_case_id):
         file_size = os.path.getsize(saved_path)
         file_mime_type = file.mimetype
 
+        pipeline_result = None
+
+        # ------------------------------------------------------------
+        # VALIDATION PASS
+        # Read the actual uploaded file first before saving DB record.
+        # Important: do NOT force document type during validation.
+        # ------------------------------------------------------------
+        if upload_mode == "extract":
+            pipeline_result = process_document_pipeline(
+                file_path=saved_path,
+                mime_type=file_mime_type,
+                forced_document_type=None,
+            )
+
+            if is_initiating:
+                validation_result = validate_initiating_document_match(
+                    intake_case=intake_case,
+                    selected_document_type=document_type,
+                    pipeline_result=pipeline_result,
+                )
+
+                if not validation_result["is_valid"]:
+                    safe_remove_file(saved_path)
+                    return error_response(
+                        validation_result["message"],
+                        errors=validation_result["errors"],
+                        status_code=400,
+                    )
+
+        # ------------------------------------------------------------
+        # CREATE DB RECORD ONLY AFTER VALIDATION PASSES
+        # ------------------------------------------------------------
         document = IntakeCaseDocument(
             intake_case_id=intake_case.id,
             document_type=document_type,
@@ -865,12 +1164,15 @@ def upload_intake_case_document(intake_case_id):
             document.nlp_status = "not_started"
             document.document_status = "uploaded"
 
+            summary = summarize_intake_case_from_documents(db, intake_case.id) or {}
+            intake_case.extracted_data = summary
+
             if is_initiating:
-                intake_case.intake_status = "needs_review"
+                intake_case.intake_status = NEEDS_REVIEW_STATUS
             else:
-                summary = summarize_intake_case_from_documents(db, intake_case.id)
-                intake_case.extracted_data = summary
-                sync_missing_document_trackers(db, intake_case, current_user_id)
+                intake_case.intake_status = determine_intake_status_after_document_change(db, intake_case)
+
+            sync_missing_document_trackers(db, intake_case, current_user_id)
 
             db.commit()
             db.refresh(document)
@@ -885,6 +1187,10 @@ def upload_intake_case_document(intake_case_id):
                 status_code=201,
             )
 
+        # ------------------------------------------------------------
+        # FINAL PROCESSING PASS
+        # Now safe to force selected type for downstream handling
+        # ------------------------------------------------------------
         pipeline_result = process_document_pipeline(
             file_path=document.uploaded_file_path,
             mime_type=document.file_mime_type,
@@ -898,6 +1204,10 @@ def upload_intake_case_document(intake_case_id):
             pipeline_result=pipeline_result,
             current_user_id=current_user_id,
         )
+
+        intake_case.extracted_data = summarize_intake_case_from_documents(db, intake_case.id) or {}
+        intake_case.intake_status = determine_intake_status_after_document_change(db, intake_case)
+        sync_missing_document_trackers(db, intake_case, current_user_id)
 
         db.commit()
         db.refresh(document)
@@ -943,10 +1253,80 @@ def get_intake_case_document(document_id):
         if not document:
             return error_response("Intake case document not found.", status_code=404)
 
+        intake_case = (
+            db.query(IntakeCase)
+            .filter(IntakeCase.id == document.intake_case_id)
+            .first()
+        )
+
+        extracted_meta = ((document.extracted_data or {}).get("metadata", {}) or {})
+
+        latest_saved_reviewed_data = {}
+        case_summary = {}
+        field_sources = {}
+
+        if intake_case:
+            latest_saved_reviewed_data = get_latest_saved_reviewed_data_for_intake_case(
+                db,
+                intake_case.id,
+                exclude_document_id=document.id if not document.is_reviewed else None,
+            ) or {}
+
+            case_summary = summarize_intake_case_from_documents(db, intake_case.id) or {}
+
+        reviewable_keys = [
+            "document_type",
+            "case_title",
+            "docket_number",
+            "case_number",
+            "date_filed",
+            "offense_or_violation",
+            "assigned_prosecutor",
+            "assigned_prosecutor_id",
+            "case_status",
+            "prosecution_result",
+            "court_result",
+            "resolution_date",
+            "filed_in_court_date",
+            "court_branch",
+            "complainants",
+            "respondents",
+            "review_flags",
+        ]
+
+        merged_review_defaults = {}
+
+        for key in reviewable_keys:
+            previous_value = latest_saved_reviewed_data.get(key)
+            current_value = extracted_meta.get(key)
+            current_reviewed_value = (document.reviewed_data or {}).get(key)
+
+            if current_reviewed_value not in (None, "", []):
+                merged_review_defaults[key] = current_reviewed_value
+                field_sources[key] = "current_reviewed"
+            elif previous_value not in (None, "", []):
+                merged_review_defaults[key] = previous_value
+                field_sources[key] = "previous_review"
+            elif current_value not in (None, "", []):
+                merged_review_defaults[key] = current_value
+                field_sources[key] = "current_extracted"
+            else:
+                merged_review_defaults[key] = [] if key in {"complainants", "respondents", "review_flags"} else ""
+                field_sources[key] = "empty"
+
+        merged_review_defaults["document_type"] = document.document_type
+
         return success_response(
             "Intake case document retrieved successfully.",
             data={
-                "document": serialize_intake_case_document(db, document)
+                "document": serialize_intake_case_document(db, document),
+                "review_context": {
+                    "latest_saved_reviewed_data": latest_saved_reviewed_data,
+                    "current_extracted_data": extracted_meta,
+                    "merged_review_defaults": merged_review_defaults,
+                    "field_sources": field_sources,
+                    "case_summary": case_summary,
+                },
             },
             status_code=200,
         )
@@ -960,7 +1340,6 @@ def get_intake_case_document(document_id):
         )
     finally:
         db.close()
-
 
 @staff_bp.route("/intake-case-documents/<int:document_id>/extract", methods=["POST"])
 @role_required(["staff"])
@@ -1036,6 +1415,10 @@ def extract_intake_case_document(document_id):
             current_user_id=current_user_id,
         )
 
+        intake_case.extracted_data = summarize_intake_case_from_documents(db, intake_case.id) or {}
+        intake_case.intake_status = determine_intake_status_after_document_change(db, intake_case)
+        sync_missing_document_trackers(db, intake_case, current_user_id)
+
         db.commit()
         db.refresh(document)
         db.refresh(intake_case)
@@ -1098,6 +1481,13 @@ def review_intake_case_document(document_id):
         reviewed_data["respondents"] = normalize_to_list(reviewed_data.get("respondents"))
         reviewed_data["review_flags"] = normalize_to_list(reviewed_data.get("review_flags"))
 
+        if document.is_initiating_document and not require_initiating_docket_number(reviewed_data):
+            return error_response(
+                "docket_number is required when reviewing the initiating document.",
+                errors=["Provide docket_number before the intake case can move forward."],
+                status_code=400,
+            )
+
         resolved_prosecutor_id, resolved_prosecutor_name = resolve_assigned_prosecutor(
             db,
             assigned_prosecutor_value=reviewed_data.get("assigned_prosecutor"),
@@ -1120,7 +1510,7 @@ def review_intake_case_document(document_id):
 
         intake_case = db.query(IntakeCase).filter(IntakeCase.id == document.intake_case_id).first()
         if intake_case:
-            summary = summarize_intake_case_from_documents(db, intake_case.id)
+            summary = summarize_intake_case_from_documents(db, intake_case.id) or {}
             intake_case.extracted_data = summary
 
             ensure_subpoena_compliance_item(db, intake_case, document, summary, current_user_id)
@@ -1130,14 +1520,10 @@ def review_intake_case_document(document_id):
             pending_review_docs = get_unreviewed_intake_documents(db, intake_case.id)
 
             if pending_review_docs:
-                intake_case.intake_status = "needs_review"
+                intake_case.intake_status = NEEDS_REVIEW_STATUS
             else:
-                intake_case.intake_status = get_post_review_intake_status(
-                    db=db,
-                    intake_case=intake_case,
-                    reviewed_document=document,
-                    summary=summary,
-                )
+                intake_case.intake_status = "for_confirmation"
+
         log_staff_action(
             db,
             user_id=current_user_id,
@@ -1177,6 +1563,7 @@ def review_intake_case_document(document_id):
         )
     finally:
         db.close()
+
 
 @staff_bp.route("/intake-case-documents/<int:document_id>", methods=["DELETE"])
 @role_required(["staff"])
@@ -1234,23 +1621,9 @@ def delete_intake_case_document(document_id):
         safe_remove_file(file_path)
 
         if intake_case:
-            summary = summarize_intake_case_from_documents(db, intake_case.id)
+            summary = summarize_intake_case_from_documents(db, intake_case.id) or {}
             intake_case.extracted_data = summary
-
-            initiating_doc = get_existing_initiating_document(db, intake_case.id, intake_case.case_type)
-            pending_review_docs = get_unreviewed_intake_documents(db, intake_case.id)
-
-            if not initiating_doc:
-                intake_case.intake_status = "draft"
-            elif pending_review_docs:
-                intake_case.intake_status = "needs_review"
-            else:
-                intake_case.intake_status = derive_intake_status_from_summary(
-                    intake_case.intake_status,
-                    summary,
-                    case_type=intake_case.case_type,
-                )
-
+            intake_case.intake_status = determine_intake_status_after_document_change(db, intake_case)
             sync_missing_document_trackers(db, intake_case, current_user_id)
 
         db.commit()
@@ -2136,19 +2509,9 @@ def delete_all_intake_case_documents():
 
         intake_cases = db.query(IntakeCase).all()
         for intake_case in intake_cases:
-            summary = summarize_intake_case_from_documents(db, intake_case.id)
+            summary = summarize_intake_case_from_documents(db, intake_case.id) or {}
             intake_case.extracted_data = summary
-
-            initiating_doc = get_existing_initiating_document(db, intake_case.id, intake_case.case_type)
-            if not initiating_doc:
-                intake_case.intake_status = "draft"
-            else:
-                intake_case.intake_status = derive_intake_status_from_summary(
-                    intake_case.intake_status,
-                    summary,
-                    case_type=intake_case.case_type,
-                )
-
+            intake_case.intake_status = determine_intake_status_after_document_change(db, intake_case)
             sync_missing_document_trackers(db, intake_case, current_user.user_id)
 
         db.commit()
@@ -3471,10 +3834,12 @@ def get_staff_dashboard_summary():
 
         all_cases = db.query(Case).all()
 
-        offense_chart_data = build_dashboard_offense_chart_data(
+        offense_chart_data = get_dashboard_offense_chart_data(
             db=db,
             intake_cases=intake_cases,
             official_cases=official_cases,
+            legacy_cases=legacy_cases,
+            limit=20,
         )
 
         intake_trackers = (

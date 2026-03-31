@@ -2,7 +2,11 @@
 
 from datetime import datetime
 from model import IntakeCase, IntakeCaseDocument, CaseDocument
-from app.utils.normalization import normalize_to_list, first_non_empty
+from app.utils.normalization import (
+    normalize_to_list,
+    first_non_empty,
+    normalize_document_type_name,
+)
 from app.constants.staff_case_constants import (
     INITIAL_DOCUMENT_TYPES_BY_CASE_TYPE,
     FOLLOWUP_DOCUMENT_TYPES_BY_CASE_TYPE,
@@ -364,3 +368,59 @@ def assign_case_document_versioning(db, document):
         document.version_status = "active"
         document.supersedes_document_id = None
 
+def detect_pipeline_document_type(pipeline_result):
+    primary_document = (pipeline_result or {}).get("primary_document") or {}
+    extracted_metadata = primary_document.get("extracted_metadata", {}) or {}
+
+    detected_document_type = (
+        primary_document.get("document_type")
+        or extracted_metadata.get("document_type")
+    )
+
+    return normalize_document_type_name(detected_document_type)
+
+
+def validate_initiating_document_match(intake_case, selected_document_type, pipeline_result):
+    detected_document_type = detect_pipeline_document_type(pipeline_result)
+    allowed_initial = INITIAL_DOCUMENT_TYPES_BY_CASE_TYPE.get(intake_case.case_type, set())
+
+    if not detected_document_type:
+        return {
+            "is_valid": False,
+            "message": "The uploaded document is not an initiating document type. Please replace it.",
+            "errors": ["The system could not confirm the uploaded document type."],
+            "detected_document_type": None,
+            "allowed_initial": sorted(list(allowed_initial)),
+        }
+
+    if detected_document_type not in allowed_initial:
+        return {
+            "is_valid": False,
+            "message": "The uploaded document is not an initiating document type. Please replace it.",
+            "errors": [
+                f"Detected document type: {detected_document_type}",
+                f"Allowed initiating types for {intake_case.case_type}: {', '.join(sorted(allowed_initial))}",
+            ],
+            "detected_document_type": detected_document_type,
+            "allowed_initial": sorted(list(allowed_initial)),
+        }
+
+    if detected_document_type != selected_document_type:
+        return {
+            "is_valid": False,
+            "message": "The uploaded document is not an initiating document type. Please replace it.",
+            "errors": [
+                f"Selected document type: {selected_document_type}",
+                f"Detected document type: {detected_document_type}",
+            ],
+            "detected_document_type": detected_document_type,
+            "allowed_initial": sorted(list(allowed_initial)),
+        }
+
+    return {
+        "is_valid": True,
+        "message": None,
+        "errors": [],
+        "detected_document_type": detected_document_type,
+        "allowed_initial": sorted(list(allowed_initial)),
+    }

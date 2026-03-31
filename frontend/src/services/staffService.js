@@ -45,6 +45,11 @@ export function getStaffDashboardRecentActivity(params = {}) {
 /* -----------------------------
  * Intake cases
  * ----------------------------- */
+
+export function saveIntakeCaseDraft(intakeCaseId, data = {}) {
+  return api.post(`/staff/intake-cases/${intakeCaseId}/save-draft`, data);
+}
+
 export function createIntakeCase(data) {
   return api.post("/staff/intake-cases", data);
 }

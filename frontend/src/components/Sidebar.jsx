@@ -4,7 +4,6 @@ import {
   FaFolderOpen,
   FaBalanceScale,
   FaUser,
-  FaCog,
   FaSignOutAlt,
   FaArchive,
 } from "react-icons/fa";
@@ -43,6 +42,7 @@ export default function Sidebar({
       { label: "Intake Cases", path: "/staff/intake-cases", icon: <FaFolderOpen /> },
       { label: "Official Cases", path: "/staff/cases", icon: <FaBalanceScale /> },
       { label: "Legacy Cases", path: "/staff/legacy-cases", icon: <FaArchive /> },
+      { label: "My Profile", path: "/my-profile", icon: <FaUser /> },
     ],
   };
 
@@ -68,13 +68,26 @@ export default function Sidebar({
     if (onLogout) onLogout();
   }
 
+  const userInitial =
+    user?.first_name?.[0]?.toUpperCase() ||
+    user?.last_name?.[0]?.toUpperCase() ||
+    "U";
+
+  const fullName =
+    [user?.first_name, user?.last_name].filter(Boolean).join(" ").trim() ||
+    "User";
+
+  const roleLabel =
+    typeof user?.role === "string" && user.role.trim()
+      ? user.role.charAt(0).toUpperCase() + user.role.slice(1)
+      : "Account";
+
   return (
     <aside
       className={`sidebar ${isOpen ? "sidebar-expanded" : "sidebar-collapsed"} ${
         mobileOpen ? "sidebar-mobile-open" : ""
       }`}
     >
-      {/* floating expand button only when collapsed */}
       {!isOpen && (
         <button
           type="button"
@@ -83,15 +96,15 @@ export default function Sidebar({
           aria-label="Expand sidebar"
           title="Expand sidebar"
         >
-         <FaAnglesRight />
+          <FaAnglesRight />
         </button>
       )}
 
       <div className="sidebar-shell">
         <div className="sidebar-top">
           <div className="sidebar-top-row">
-            <div className="sidebar-office-header">
-              
+            <div className="sidebar-brand">
+              <div className="sidebar-office-header">
                 <img
                   src="/doj-seal.jpg"
                   alt="DOJ Logo"
@@ -105,7 +118,7 @@ export default function Sidebar({
                   <div className="sidebar-office-sub">PROSECUTOR’S OFFICE</div>
                 </div>
               )}
-           
+            </div>
 
             {isOpen && (
               <button
@@ -120,35 +133,15 @@ export default function Sidebar({
             )}
           </div>
 
-          {isOpen && (
-            <div className="sidebar-header-card">
-              <div className="sidebar-header-avatar">
-                {user?.profile_pic ? (
-                  <img
-                    src={`http://127.0.0.1:5000/${user.profile_pic}?t=${Date.now()}`}
-                    alt="Profile"
-                    className="sidebar-profile-img"
-                  />
-                ) : (
-                  <span>{user?.first_name?.[0] || "U"}</span>
-                )}
-              </div>
 
-              <div className="sidebar-header-name">
-                {user?.first_name} {user?.last_name}
-              </div>
-
-              <div className="sidebar-header-subtext">
-                {user?.email || user?.role}
-              </div>
-            </div>
-          )}
         </div>
 
         <nav className="nav">
+
           {items.map((it) => (
             <button
               key={it.path}
+              type="button"
               className={`nav-item ${isActive(it.path) ? "nav-item-active" : ""}`}
               onClick={() => handleNavigate(it.path)}
               title={!isOpen ? it.label : ""}
@@ -160,6 +153,12 @@ export default function Sidebar({
         </nav>
 
         <div className="sidebar-footer">
+          {isOpen && (
+            <div className="sidebar-footer-meta">
+              Secure staff workspace
+            </div>
+          )}
+
           <button
             type="button"
             className="sidebar-footer-btn sidebar-footer-btn-logout"

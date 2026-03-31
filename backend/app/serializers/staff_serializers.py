@@ -1,6 +1,7 @@
 #backend/app/serializers/staff_serializers.py
 
 from datetime import datetime
+
 from model import User, CaseParty, CaseDocument
 # -----------------------------
 # Serialization helpers
@@ -26,8 +27,9 @@ def serialize_prosecutor(user):
 
 def map_intake_status_label(status):
     mapping = {
+        "pre_intake": "Initializing Intake",
         "draft": "Draft",
-        "needs_review": "For Extraction Review",
+        "needs_review": "Needs Review",
         "for_confirmation": "For Confirmation",
         "active": "Active",
         "awaiting_compliance": "Awaiting Respondent Compliance",
@@ -252,36 +254,73 @@ def serialize_case(case_obj, parties=None, documents=None):
 
 
 def serialize_document_tracker(item):
+    now = datetime.utcnow()
+
+    due_date = item.due_date.isoformat() if item.due_date else None
+    requested_date = item.requested_date.isoformat() if item.requested_date else None
+    expected_date = item.expected_date.isoformat() if item.expected_date else None
+    received_date = item.received_date.isoformat() if item.received_date else None
+    created_at = item.created_at.isoformat() if item.created_at else None
+    updated_at = item.updated_at.isoformat() if item.updated_at else None
+
+    is_completed = bool(item.received_date) or str(item.status or "").lower() in {
+        "received",
+        "completed",
+        "done",
+    }
+
+    is_overdue = False
+    days_remaining = None
+    days_delayed = None
+
+    if item.due_date:
+        delta_days = (item.due_date.date() - now.date()).days
+        if is_completed:
+            days_remaining = None
+            days_delayed = None
+        else:
+            days_remaining = delta_days if delta_days >= 0 else 0
+            if delta_days < 0:
+                is_overdue = True
+                days_delayed = abs(delta_days)
+
     return {
         "id": item.id,
         "intake_case_id": item.intake_case_id,
         "case_id": item.case_id,
-        "document_type": item.document_type,
-        "tracking_type": item.tracking_type,
-        "source_location": item.source_location,
-        "office_department": item.office_department,
-        "responsible_party": item.responsible_party,
-        "requested_date": item.requested_date.isoformat() if item.requested_date else None,
-        "expected_date": item.expected_date.isoformat() if item.expected_date else None,
-        "due_date": item.due_date.isoformat() if item.due_date else None,
-        "received_date": item.received_date.isoformat() if item.received_date else None,
-        "status": item.status,
-        "status_label": {
-            "missing": "Missing",
-            "awaiting": "Awaiting Submission",
-            "requested": "Requested",
-            "in_process": "In Process",
-            "received": "Received",
-            "overdue": "Overdue",
-            "not_applicable": "Not Applicable",
-        }.get(item.status, item.status),
-        "remarks": item.remarks,
-        "created_by": item.created_by,
-        "updated_by": item.updated_by,
-        "created_at": item.created_at.isoformat() if item.created_at else None,
-        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
-    }
 
+        "document_type": item.document_type,
+        "document_type_label": (item.document_type or "").replace("_", " ").title(),
+
+        "track_type": getattr(item, "tracking_type", None),
+        "track_type_label": (getattr(item, "tracking_type", "") or "").replace("_", " ").title(),
+
+        "status": getattr(item, "status", None),
+        "status_label": (getattr(item, "status", "") or "").replace("_", " ").title(),
+
+        "source_location": getattr(item, "source_location", None),
+        "office_department": getattr(item, "office_department", None),
+        "office": getattr(item, "office_department", None),
+
+        "responsible_party": getattr(item, "responsible_party", None),
+
+        "requested_date": requested_date,
+        "expected_date": expected_date,
+        "due_date": due_date,
+        "received_date": received_date,
+
+        "remarks": getattr(item, "remarks", None),
+
+        "related_document_id": getattr(item, "related_document_id", None),
+
+        "is_completed": is_completed,
+        "is_overdue": is_overdue,
+        "days_remaining": days_remaining,
+        "days_delayed": days_delayed,
+
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
 
 
 
@@ -364,49 +403,76 @@ def serialize_dashboard_compliance_row(item):
     }
 
 def serialize_compliance_item(item):
+    now = datetime.utcnow()
+
+    issued_date = item.issued_date.isoformat() if item.issued_date else None
+    due_date = item.due_date.isoformat() if item.due_date else None
+    complied_date = item.complied_date.isoformat() if item.complied_date else None
+    created_at = item.created_at.isoformat() if item.created_at else None
+    updated_at = item.updated_at.isoformat() if item.updated_at else None
+
+    status = getattr(item, "compliance_status", None) or getattr(item, "status", None)
+    normalized_status = str(status or "").strip().lower()
+
+    is_complied = bool(item.complied_date) or normalized_status in {
+        "complied",
+        "completed",
+        "done",
+    }
+
+    is_overdue = False
     days_remaining = None
-    derived_timeline_status = None
+    days_overdue = None
 
-    if item.due_date and item.compliance_status == "pending":
-        delta = item.due_date.date() - datetime.utcnow().date()
-        days_remaining = delta.days
-
-        if delta.days < 0:
-            derived_timeline_status = "overdue"
-        elif delta.days == 0:
-            derived_timeline_status = "due_today"
-        else:
-            derived_timeline_status = "pending"
+    if item.due_date and not is_complied:
+        delta_days = (item.due_date.date() - now.date()).days
+        days_remaining = delta_days if delta_days >= 0 else 0
+        if delta_days < 0:
+            is_overdue = True
+            days_overdue = abs(delta_days)
 
     return {
         "id": item.id,
         "intake_case_id": item.intake_case_id,
         "case_id": item.case_id,
-        "related_document_id": item.related_document_id,
-        "compliance_type": item.compliance_type,
-        "title": item.title,
-        "description": item.description,
-        "issued_date": item.issued_date.isoformat() if item.issued_date else None,
-        "due_date": item.due_date.isoformat() if item.due_date else None,
-        "days_to_comply": item.days_to_comply,
+
+        "title": getattr(item, "title", None),
+        "description": getattr(item, "description", None),
+
+        "type": getattr(item, "compliance_type", None) or getattr(item, "type", None),
+        "type_label": (
+            (getattr(item, "compliance_type", None) or getattr(item, "type", "") or "")
+            .replace("_", " ")
+            .title()
+        ),
+
+        "compliance_status": status,
+        "compliance_status_label": (status or "").replace("_", " ").title() if status else None,
+        "status": status,
+        "status_label": (status or "").replace("_", " ").title() if status else None,
+
+        "issued_date": issued_date,
+        "due_date": due_date,
+        "days_to_comply": getattr(item, "days_to_comply", None),
+        "complied_date": complied_date,
+
+        "responsible_party": getattr(item, "responsible_party", None),
+        "remarks": getattr(item, "remarks", None),
+
+        "related_document_id": getattr(item, "related_document_id", None),
+        "trigger_document_id": getattr(item, "trigger_document_id", None),
+        "evidence_document_id": getattr(item, "evidence_document_id", None),
+
+        "is_complied": is_complied,
+        "is_overdue": is_overdue,
         "days_remaining": days_remaining,
-        "timeline_status": derived_timeline_status,
-        "complied_date": item.complied_date.isoformat() if item.complied_date else None,
-        "compliance_status": item.compliance_status,
-        "compliance_status_label": {
-            "pending": "Pending",
-            "complied": "Complied",
-            "overdue": "Overdue",
-            "not_applicable": "Not Applicable",
-        }.get(item.compliance_status, item.compliance_status),
-        "responsible_party": item.responsible_party,
-        "remarks": item.remarks,
-        "created_by": item.created_by,
-        "updated_by": item.updated_by,
-        "created_at": item.created_at.isoformat() if item.created_at else None,
-        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+        "days_overdue": days_overdue,
+
+        "created_at": created_at,
+        "updated_at": updated_at,
     }
 
+    
 def serialize_intake_case_document(db, doc):
     ocr_status_label_map = {
         "not_started": "Not Started",

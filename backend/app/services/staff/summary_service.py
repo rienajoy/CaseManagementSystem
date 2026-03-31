@@ -1,10 +1,197 @@
 #backend/app/services/staff/summary_service.py
 
 from datetime import datetime
-from model import IntakeCase, IntakeCaseDocument
+from model import IntakeCase, IntakeCaseDocument, Case
 from app.utils.normalization import normalize_to_list, first_non_empty
 from app.constants.staff_case_constants import INQ_INITIATING_DOCUMENT_TYPES
+import re
+from collections import defaultdict
+from sqlalchemy.orm import Session
+from app.services.staff.intake_document_service import has_any_uploaded, get_case_type_resolution_types
 
+
+import re
+from collections import defaultdict
+
+MAX_OFFENSES = 20
+
+OFFENSE_CATEGORY_RULES = [
+    ("Theft", ["theft", "qualified theft"]),
+    ("Robbery", ["robbery"]),
+    ("Estafa", ["estafa", "swindling"]),
+    ("Falsification", ["falsification", "forgery"]),
+    ("Physical Injuries", ["physical injur"]),
+    ("Homicide", ["homicide"]),
+    ("Murder", ["murder"]),
+    ("Rape", ["rape"]),
+    ("Acts of Lasciviousness", ["acts of lascivious"]),
+    ("Drug Cases", ["dangerous drugs", "drug"]),
+    ("VAWC", ["violence against women", "vawc"]),
+    ("Child Abuse", ["child abuse"]),
+    ("Trespass", ["trespass"]),
+    ("Malicious Mischief", ["malicious mischief"]),
+    ("Threats", ["threat"]),
+    ("Coercion", ["coercion"]),
+    ("Firearms Cases", ["firearm"]),
+    ("Cybercrime", ["cyber"]),
+    ("BP 22", ["bp 22", "bouncing check"]),
+    ("Fencing", ["fencing"]),
+]
+
+def get_latest_saved_reviewed_data_for_intake_case(db, intake_case_id, exclude_document_id=None):
+    documents = (
+        db.query(IntakeCaseDocument)
+        .filter(IntakeCaseDocument.intake_case_id == intake_case_id)
+        .order_by(IntakeCaseDocument.reviewed_at.asc(), IntakeCaseDocument.created_at.asc())
+        .all()
+    )
+
+    latest = {
+        "document_type": None,
+        "case_title": None,
+        "docket_number": None,
+        "case_number": None,
+        "date_filed": None,
+        "offense_or_violation": None,
+        "assigned_prosecutor": None,
+        "assigned_prosecutor_id": None,
+        "case_status": None,
+        "prosecution_result": None,
+        "court_result": None,
+        "resolution_date": None,
+        "filed_in_court_date": None,
+        "court_branch": None,
+        "complainants": [],
+        "respondents": [],
+        "review_flags": [],
+    }
+
+    for doc in documents:
+        if exclude_document_id and doc.id == exclude_document_id:
+            continue
+
+        reviewed = doc.reviewed_data or {}
+        if not reviewed:
+            continue
+
+        for key, value in reviewed.items():
+            if key in {"complainants", "respondents", "review_flags"}:
+                normalized = normalize_to_list(value)
+                if normalized:
+                    latest[key] = normalized
+            else:
+                if value not in (None, "", []):
+                    latest[key] = value
+
+    return latest
+    
+
+def normalize_offense_category(raw_name):
+    name = (raw_name or "").strip().lower()
+
+    if not name:
+        return None
+
+    for category, keywords in OFFENSE_CATEGORY_RULES:
+        for keyword in keywords:
+            if keyword in name:
+                return category
+
+    return "Other Violations"
+
+
+def split_offense_text(raw_text):
+    """
+    Split offense text into parts.
+    Handles commas, semicolons, slashes, and newlines.
+    """
+    if not raw_text:
+        return []
+
+    if isinstance(raw_text, list):
+        parts = []
+        for item in raw_text:
+            parts.extend(split_offense_text(item))
+        return parts
+
+    parts = re.split(r"[,\n;]+|/+", str(raw_text))
+    cleaned = [part.strip() for part in parts if part and part.strip()]
+    return cleaned
+
+
+def extract_case_categories(raw_text):
+    """
+    Return a set of major categories for one case.
+    Uses a set so one case is counted only once per category.
+    """
+    categories = set()
+
+    parts = split_offense_text(raw_text)
+
+    if not parts and raw_text:
+        parts = [str(raw_text).strip()]
+
+    for part in parts:
+        category = normalize_offense_category(part)
+        if category:
+            categories.add(category)
+
+    return categories
+
+
+def get_dashboard_offense_chart_data(db, intake_cases, official_cases, legacy_cases=None, limit=MAX_OFFENSES):
+    """
+    Build top offense categories for dashboard.
+
+    - unconverted intake cases only
+    - official cases
+    - legacy cases
+    - one case counts only once per category
+    """
+    category_case_keys = defaultdict(set)
+
+    # Intake cases (skip converted para walay double count)
+    for intake_case in intake_cases:
+        if intake_case.converted_case_id:
+            continue
+
+        extracted = intake_case.extracted_data or {}
+
+        if not isinstance(extracted, dict) or not (
+            extracted.get("offense_or_violation")
+            or extracted.get("offense")
+            or extracted.get("violation")
+        ):
+            extracted = summarize_intake_case_from_documents(db, intake_case.id) or {}
+
+        raw_offense = None
+        if isinstance(extracted, dict):
+            raw_offense = (
+                extracted.get("offense_or_violation")
+                or extracted.get("offense")
+                or extracted.get("violation")
+            )
+
+        for category in extract_case_categories(raw_offense):
+            category_case_keys[category].add(f"intake:{intake_case.id}")
+
+    # Official cases
+    for case in official_cases:
+        for category in extract_case_categories(case.offense_or_violation):
+            category_case_keys[category].add(f"official:{case.id}")
+
+    # Legacy cases
+    for case in (legacy_cases or []):
+        for category in extract_case_categories(case.offense_or_violation):
+            category_case_keys[category].add(f"legacy:{case.id}")
+
+    grouped = [
+        {"name": category, "total": len(case_keys)}
+        for category, case_keys in category_case_keys.items()
+    ]
+
+    grouped.sort(key=lambda item: item["total"], reverse=True)
+    return grouped[:limit]
 
 # -----------------------------
 # Summary / state helpers

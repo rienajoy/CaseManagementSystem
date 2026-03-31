@@ -7,7 +7,16 @@ import { logout } from "../auth";
 
 import "../styles/layout/app-shell.css";
 
-export default function UserLayout({ user, children }) {
+export default function UserLayout({
+  user,
+  children,
+  sectionBadge,
+  pageTitle,
+  pageSubtitle,
+  onGlobalSearchChange,
+  globalSearchPlaceholder,
+  topbarFilterContent,
+}) {
   const navigate = useNavigate();
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -43,9 +52,7 @@ export default function UserLayout({ user, children }) {
     }
 
     window.addEventListener("resize", handleResize);
-    return () => {
-      window.removeEventListener("resize", handleResize);
-    };
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
 
   return (
@@ -88,8 +95,18 @@ export default function UserLayout({ user, children }) {
           user={user}
           onLogout={handleLogout}
           onToggleSidebar={toggleSidebar}
+          sectionBadge={sectionBadge}
+          pageTitle={pageTitle}
+          pageSubtitle={pageSubtitle}
+          onSearchChange={onGlobalSearchChange}
+          searchPlaceholder={globalSearchPlaceholder}
+          filterContent={topbarFilterContent}
         />
-        <div className="content">{children}</div>
+
+        <main className="content">{children}</main>
+         <footer className="app-footer">
+    Case Management System • DOJ Prototype
+  </footer>
       </div>
     </div>
   );

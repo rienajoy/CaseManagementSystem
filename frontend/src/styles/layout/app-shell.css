@@ -1,49 +1,103 @@
-.app-shell {
-  width: 100%;
-  min-height: 100vh;
+/* src/styles/layout/app-shell.css */
+html,
+body,
+#root {
   margin: 0;
   padding: 0;
-  background: #f7efe6;
-  font-family: "Segoe UI", Arial, sans-serif;
-  color: #111827;
-  overflow-x: hidden;
-}
-
-.app-shell-sidebar-open .main {
-  margin-left: 270px !important;
-}
-
-.app-shell-sidebar-closed .main {
-  margin-left: 72px !important;
-}
-
-.app-shell-mobile .main {
-  margin-left: 0 !important;
-}
-
-.main {
   width: 100%;
-  min-height: 100vh;
+  height: 100%;
+  overflow: hidden;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.app-shell {
+  --sidebar-width: 290px;
+  --topbar-height: 72px;
+  --footer-height: 24px;
+
+  width: 100%;
+  height: 100vh;
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  overflow: hidden;
+  background: #fff8f8 !important;
+  font-family: "Segoe UI", Arial, sans-serif;
+}
+
+/* desktop states */
+.app-shell-sidebar-open {
+  --sidebar-width: 290px;
+}
+
+.app-shell-sidebar-closed {
+  --sidebar-width: 64px !important;
+}
+
+.app-shell-mobile {
+  --sidebar-width: 0px;
+  grid-template-columns: 1fr;
+}
+
+/* SIDEBAR */
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  overflow: hidden;
+  z-index: 1000;
+  transition: width 0.28s ease, transform 0.28s ease;
+  border-right: none !important;
+  box-shadow: none !important;
+  background: #3e1318 !important;
+}
+
+/* MAIN */
+.main {
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  transition: margin-left 0.28s ease;
+  min-height: 0;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-rows: var(--topbar-height) minmax(0, 1fr) var(--footer-height);
+  overflow: hidden;
+  background: #f7efe6;
 }
 
-.sidebar-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.45);
-  backdrop-filter: blur(2px);
+
+/* TOPBAR */
+.topbar,
+.topbar-modern {
+  position: sticky;
+  top: 0;
   z-index: 900;
+  width: 100%;
+  height: var(--topbar-height);
+  min-height: var(--topbar-height);
+  margin: 0 !important;
+  border-radius: 0 !important;
+  flex-shrink: 0;
+  display: flex;
+  background: #fff8f8 !important;
 }
 
+/* CONTENT */
 .content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0 !important;
   position: relative;
-  padding: 18px 22px;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: #fffdfc !important;
 }
 
 .content::before {
@@ -62,8 +116,37 @@
 .content > * {
   position: relative;
   z-index: 1;
+  width: 100%;
+  margin: 0 !important;
+  min-height: 0 !important;
 }
 
+/* FOOTER */
+
+.app-footer {
+  flex-shrink: 0;
+  height: var(--footer-height);
+  min-height: var(--footer-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(127, 29, 29, 0.28) !important;
+  color: black;
+  font-size: 10px !important;
+  position: relative;
+  z-index: 5;
+}
+
+/* overlay */
+.sidebar-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(2px);
+  z-index: 950;
+}
+
+/* mobile open button */
 .sidebar-mobile-open-btn {
   position: fixed;
   left: 12px;
@@ -90,12 +173,40 @@
 }
 
 @media (max-width: 1000px) {
-  .content {
-    padding: 16px;
+  .app-shell {
+    --sidebar-width: 0px;
+    grid-template-columns: 1fr;
   }
 
-  .app-shell-sidebar-open .main,
-  .app-shell-sidebar-closed .main {
-    margin-left: 0 !important;
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    transform: translateX(-100%);
+    height: 100dvh;
+  }
+
+  .sidebar.sidebar-expanded {
+    width: 290px !important;
+    min-width: 290px !important;
+    max-width: 290px !important;
+  }
+
+  .sidebar.sidebar-collapsed {
+    width: 64px !important;
+    min-width: 64px !important;
+    max-width: 64px !important;
+  }
+
+  .sidebar-mobile-open {
+    transform: translateX(0);
+  }
+
+  .main {
+    width: 100%;
+    min-height: 100dvh;
+    height: 100dvh;
   }
 }
+
+
