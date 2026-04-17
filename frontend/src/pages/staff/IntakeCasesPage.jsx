@@ -1,38 +1,59 @@
 // src/pages/staff/IntakeCasesPage.jsx
-import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   RotateCcw,
   RefreshCw,
   SlidersHorizontal,
   X,
+  Eye,
+  Trash2,
 } from "lucide-react";
 
 import api from "../../api";
 import UserLayout from "../../components/UserLayout";
+
+import "../../styles/staff/document-review-modal.css";
+
+import { useIntakeCases } from "../../hooks/useIntakeCases";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+
 import { getStoredUser, setStoredUser } from "../../utils/storage";
 import { isAdminLevel, isStaff } from "../../utils/roles";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+
 import {
   createIntakeCase,
   uploadIntakeCaseDocument,
+  extractIntakeCaseDocument,
+  getIntakeCaseDocument,
   confirmIntakeCase,
-  saveIntakeCaseDraft, // ✅ ADD THIS
+  saveIntakeCaseDraft,
+  deleteIntakeCase,
 } from "../../services/staffService";
 
 import ReviewedDataModal from "../../components/staff/ReviewedDataModal";
 import DocumentReviewModal from "../../components/staff/DocumentReviewModal";
 
+import DocumentTypeMismatchModal from "../../components/staff/DocumentTypeMismatchModal";
+import {
+  normalizeDocumentType,
+  getDetectedDocumentType,
+  isDocumentTypeMismatch,
+  buildMismatchInfo,
+} from "../../utils/documentTypeMismatch";
+
 import "../../styles/staff/intake-cases-page.css";
 
+import SearchBar from "../../components/staff/SearchBar";
+
+
 export default function IntakeCasesPage() {
+
   const navigate = useNavigate();
   const [user, setUser] = useState(getStoredUser());
 
-  const [lastReviewedDocumentId, setLastReviewedDocumentId] = useState(null);
-
-  const [pageLoading, setPageLoading] = useState(true);
-  const [tableLoading, setTableLoading] = useState(false);
-  const [err, setErr] = useState("");
+  const initializedRef = useRef(false);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
@@ -42,6 +63,25 @@ export default function IntakeCasesPage() {
   const [submitting, setSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState("all");
 
+  const [showCanonicalUpdateModal, setShowCanonicalUpdateModal] = useState(false);
+const [canonicalCandidates, setCanonicalCandidates] = useState([]);
+const [canonicalSelections, setCanonicalSelections] = useState({});
+const [canonicalSourceDoc, setCanonicalSourceDoc] = useState(null);
+const [applyingCanonicalUpdates, setApplyingCanonicalUpdates] = useState(false);
+
+const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false);
+const [showDeleteSuccessModal, setShowDeleteSuccessModal] = useState(false);
+const [intakeCaseToDelete, setIntakeCaseToDelete] = useState(null);
+const [deletingIntakeCase, setDeletingIntakeCase] = useState(false);
+
+const [uploadFormError, setUploadFormError] = useState("");
+
+const [deleteErrorModal, setDeleteErrorModal] = useState({
+  isOpen: false,
+  message: "",
+});
+
+
   const [showCaseCreatedSuccessModal, setShowCaseCreatedSuccessModal] =
   useState(false);
 const [createdSuccessInfo, setCreatedSuccessInfo] = useState(null);
@@ -49,11 +89,17 @@ const [createdSuccessInfo, setCreatedSuccessInfo] = useState(null);
   const [selectedCase, setSelectedCase] = useState(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
 
-  const [reviewModalOpen, setReviewModalOpen] = useState(false);
-  const [selectedDocumentId, setSelectedDocumentId] = useState(null);
+  const [isDragActive, setIsDragActive] = useState(false);
+  
+const [startingWorkflow, setStartingWorkflow] = useState(false);
+  
 
   const [showReviewedDataModal, setShowReviewedDataModal] = useState(false);
   const [reviewedDocumentPayload, setReviewedDocumentPayload] = useState(null);
+
+  const [pollingDocumentId, setPollingDocumentId] = useState(null);
+const [pollingStarted, setPollingStarted] = useState(false);
+const [pollingAttempts, setPollingAttempts] = useState(0);
 
   const [confirmingIntake, setConfirmingIntake] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
@@ -68,37 +114,228 @@ const [createdSuccessInfo, setCreatedSuccessInfo] = useState(null);
 
   const [showProcessingModal, setShowProcessingModal] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [processingComplete, setProcessingComplete] = useState(false);
-
   const [uploadedInitiatingDocument, setUploadedInitiatingDocument] =
     useState(null);
-  const [showUploadSuccessModal, setShowUploadSuccessModal] = useState(false);
   const [uploadedDocumentSummary, setUploadedDocumentSummary] = useState(null);
-
-  const [reviewModal, setReviewModal] = useState({
-    isOpen: false,
-    documentId: null,
-  });
 
   const [showReviewSavedToast, setShowReviewSavedToast] = useState(false);
 
   const [showMismatchModal, setShowMismatchModal] = useState(false);
   const [mismatchInfo, setMismatchInfo] = useState(null);
 
-  const [prosecutorOptions, setProsecutorOptions] = useState([]);
+
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+const [selectedReviewDocumentId, setSelectedReviewDocumentId] = useState(null);
+
+const [lastReviewedDocumentId, setLastReviewedDocumentId] = useState(null);
 
 const [filters, setFilters] = useState({
   search: "",
   status: "",
+  caseType: "",
+  intakeStatus: "",
+  intakeDocumentStatus: "",
+  prosecutionResult: "",
+  assignedProsecutor: "",
+  sortBy: "",
+  sortDirection: "asc",
+  perPage: "5",
 });
 
-  const [rows, setRows] = useState([]);
   const [pagination, setPagination] = useState({
     page: 1,
     per_page: 10,
     total: 0,
     total_pages: 1,
   });
+
+const [searchInput, setSearchInput] = useState(filters.search || "");
+
+
+const intakeParams = useMemo(() => ({
+  page: pagination.page,
+  per_page: pagination.per_page || 10,
+  search: filters.search || "",
+  tab: activeTab,
+  ...(activeTab === "inv" ? { case_type: "INV" } : {}),
+  ...(activeTab === "inq" ? { case_type: "INQ" } : {}),
+  ...(filters.caseType ? { case_type: filters.caseType } : {}),
+  ...(filters.intakeStatus ? { intake_status: filters.intakeStatus } : {}),
+  ...(filters.intakeDocumentStatus
+    ? { intake_document_status: filters.intakeDocumentStatus }
+    : {}),
+  ...(filters.prosecutionResult
+    ? { prosecution_result: filters.prosecutionResult }
+    : {}),
+  ...(filters.assignedProsecutor
+    ? { assigned_prosecutor_id: filters.assignedProsecutor }
+    : {}),
+}), [
+  pagination.page,
+  pagination.per_page,
+  activeTab,
+  filters.search,
+  filters.caseType,
+  filters.intakeStatus,
+  filters.intakeDocumentStatus,
+  filters.prosecutionResult,
+  filters.assignedProsecutor,
+]);
+
+const queryClient = useQueryClient();
+
+const { data: prosecutorsData } = useQuery({
+  queryKey: ["staff-prosecutors"],
+  queryFn: async () => {
+    const res = await api.get("/staff/prosecutors");
+
+    const payload = res?.data?.data || {};
+    const list =
+      payload.prosecutors ||
+      payload.items ||
+      payload.users ||
+      payload.staff ||
+      [];
+
+    return Array.isArray(list)
+      ? list.map((item, index) => ({
+          id:
+            item?.id ??
+            item?.user_id ??
+            item?.prosecutor_id ??
+            item?.staff_id ??
+            `prosecutor-${index}`,
+          name:
+            item?.full_name ||
+            item?.display_name ||
+            item?.name ||
+            "Unknown",
+        }))
+      : [];
+  },
+  staleTime: 5 * 60 * 1000,
+});
+
+const prosecutorOptions = prosecutorsData || [];
+
+const {
+  data: intakeData,
+  isLoading: tableLoading,
+  isFetching,
+  error,
+  refetch: refetchIntakeCases,
+} = useIntakeCases(intakeParams);
+
+const createIntakeCaseMutation = useMutation({
+  mutationFn: (payload) => createIntakeCase(payload),
+});
+
+const saveDraftMutation = useMutation({
+  mutationFn: ({ intakeCaseId, payload }) =>
+    saveIntakeCaseDraft(intakeCaseId, payload),
+  onSuccess: async () => {
+    await refreshIntakeQueries();
+  },
+});
+
+const uploadInitiatingDocumentMutation = useMutation({
+  mutationFn: ({ intakeCaseId, formData }) =>
+    uploadIntakeCaseDocument(intakeCaseId, formData),
+});
+
+const confirmIntakeCaseMutation = useMutation({
+  mutationFn: ({ intakeCaseId, payload }) =>
+    confirmIntakeCase(intakeCaseId, payload),
+});
+
+const deleteIntakeCaseMutation = useMutation({
+  mutationFn: ({ intakeCaseId }) => deleteIntakeCase(intakeCaseId),
+  onSuccess: async () => {
+    await refreshIntakeQueries();
+  },
+});
+
+const applyCanonicalUpdatesMutation = useMutation({
+  mutationFn: ({ intakeCaseId, payload }) =>
+    api.patch(`/staff/intake-cases/${intakeCaseId}/apply-canonical-updates`, payload),
+  onSuccess: async () => {
+    await refreshIntakeQueries();
+  },
+});
+
+const extractInitiatingDocumentMutation = useMutation({
+  mutationFn: ({ documentId }) => extractIntakeCaseDocument(documentId),
+});
+
+const rows = Array.isArray(
+  intakeData?.intake_cases ||
+    intakeData?.items ||
+    intakeData?.rows ||
+    intakeData?.records
+)
+  ? (
+      intakeData?.intake_cases ||
+      intakeData?.items ||
+      intakeData?.rows ||
+      intakeData?.records
+    )
+  : [];
+
+const pageLoading = false;
+const err =
+  error?.response?.data?.message ||
+  error?.message ||
+  "";
+
+
+useEffect(() => {
+  const meta = intakeData?.pagination || intakeData?.meta || {};
+  if (!intakeData) return;
+
+  const nextPage = Number(meta.page || pagination.page || 1);
+  const nextPerPage = Number(meta.per_page || meta.perPage || pagination.per_page || 10);
+  const nextTotal = Number(meta.total || rows.length || 0);
+  const nextTotalPages = Number(meta.total_pages || meta.totalPages || 1);
+
+  setPagination((prev) => {
+    if (
+      prev.page === nextPage &&
+      prev.per_page === nextPerPage &&
+      prev.total === nextTotal &&
+      prev.total_pages === nextTotalPages
+    ) {
+      return prev;
+    }
+
+    return {
+      ...prev,
+      page: nextPage,
+      per_page: nextPerPage,
+      total: nextTotal,
+      total_pages: nextTotalPages,
+    };
+  });
+}, [intakeData, rows.length, pagination.page, pagination.per_page]);
+
+useEffect(() => {
+  const timeout = setTimeout(() => {
+    setFilters((prev) => {
+      if (prev.search === searchInput) return prev;
+
+      return {
+        ...prev,
+        search: searchInput,
+      };
+    });
+
+    setPagination((prev) => ({
+      ...prev,
+      page: 1,
+    }));
+  }, 350);
+
+  return () => clearTimeout(timeout);
+}, [searchInput]);
 
   const intakeTabs = [
     { key: "all", label: "Intake Cases" },
@@ -107,6 +344,19 @@ const [filters, setFilters] = useState({
     { key: "dismissed", label: "Dismissed Intake Cases" },
     { key: "drafts", label: " Intake Drafts" },
   ];
+
+const formatDateOnly = (value) => {
+  if (!value) return "—";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+
+  return date.toLocaleDateString("en-PH", {
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+  });
+};
 
   const formatDateTime = (value) => {
   if (!value) return "—";
@@ -123,6 +373,19 @@ const [filters, setFilters] = useState({
     hour12: true,
   });
 };
+
+function isDocumentExtractionComplete(doc) {
+  const ocrDone = doc?.ocr_status === "completed";
+  const nlpDone = doc?.nlp_status === "completed";
+  const hasData = !!doc?.extracted_data;
+
+  return ocrDone && nlpDone && hasData;
+}
+
+function isDocumentExtractionFailed(doc) {
+  return doc?.ocr_status === "failed" || doc?.nlp_status === "failed";
+}
+
 
 function formatFileSize(bytes) {
   if (bytes == null || isNaN(bytes)) return "0 B";
@@ -187,6 +450,18 @@ function formatIntakeId(id) {
 
     return String(value).trim().toLowerCase();
   }
+
+  function getPartyDisplay(value) {
+  if (Array.isArray(value)) {
+    return value.length ? value.join(", ") : "—";
+  }
+
+  if (typeof value === "string") {
+    return value.trim() || "—";
+  }
+
+  return "—";
+}
 
   function toDisplayValue(value, fallback = "—") {
     if (value === null || value === undefined || value === "") return fallback;
@@ -262,22 +537,6 @@ function formatIntakeId(id) {
     return toDisplayValue(value, fallback);
   }
 
-  function formatFileSize(bytes) {
-    if (bytes == null || isNaN(bytes)) return "0 B";
-
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let size = Number(bytes);
-    let unitIndex = 0;
-
-    while (size >= 1024 && unitIndex < units.length - 1) {
-      size /= 1024;
-      unitIndex++;
-    }
-
-    return `${size.toFixed(size >= 10 || unitIndex === 0 ? 0 : 1)} ${
-      units[unitIndex]
-    }`;
-  }
 
   const initiatingDocumentOptions = useMemo(() => {
     if (caseType === "INV") {
@@ -299,12 +558,141 @@ function formatIntakeId(id) {
     return [];
   }, [caseType]);
 
+useEffect(() => {
+  if (!pollingStarted || !pollingDocumentId) return;
+
+  let cancelled = false;
+
+  const interval = setInterval(async () => {
+    try {
+      const res = await getIntakeCaseDocument(pollingDocumentId);
+      const payload = res?.data?.data || {};
+      const document = payload?.document || null;
+
+      if (!document || cancelled) return;
+
+      setUploadProgress((prev) => {
+        if (prev >= 90) return prev;
+        return Math.min(prev + 3, 90);
+      });
+
+      setPollingAttempts((prev) => {
+        const next = prev + 1;
+
+        if (next > 40) {
+          clearInterval(interval);
+
+          if (!cancelled) {
+            setPollingStarted(false);
+            setPollingDocumentId(null);
+            setShowProcessingModal(false);
+            alert("Extraction is taking too long. Please try again.");
+          }
+        }
+
+        return next;
+      });
+
+      if (isDocumentExtractionFailed(document)) {
+        clearInterval(interval);
+        if (cancelled) return;
+
+        setPollingStarted(false);
+        setPollingDocumentId(null);
+        setShowProcessingModal(false);
+        setShowMismatchModal(false);
+        setMismatchInfo(null);
+
+        alert("Document extraction failed.");
+        return;
+      }
+
+const rawSelectedType =
+  initiatingDocumentType || document?.document_type || "";
+
+const rawDetectedType = getDetectedDocumentType(document);
+
+const selectedType = normalizeDocumentType(rawSelectedType);
+const detectedType = normalizeDocumentType(rawDetectedType);
+
+const backendMismatchFlag =
+  document?.is_document_type_mismatch === true ||
+  document?.is_mismatch === true;
+
+const hasMismatch =
+  backendMismatchFlag ||
+  (!!selectedType && !!detectedType && selectedType !== detectedType);
+
+      if (hasMismatch) {
+        clearInterval(interval);
+        if (cancelled) return;
+
+        setUploadProgress(100);
+
+setMismatchInfo(
+  buildMismatchInfo(document, rawSelectedType, initiatingFile)
+);
+
+        setShowMismatchModal(true);
+        setShowProcessingModal(true);
+        setPollingStarted(false);
+        setPollingDocumentId(null);
+
+        return;
+      }
+
+      if (isDocumentExtractionComplete(document)) {
+        clearInterval(interval);
+        if (cancelled) return;
+
+        setUploadProgress(100);
+        setUploadedInitiatingDocument(document);
+        setUploadedDocumentSummary(document);
+
+        setShowProcessingModal(false);
+        setPollingStarted(false);
+        setPollingDocumentId(null);
+
+        openReusableReviewModal(document.id);
+        return;
+      }
+    } catch (error) {
+      clearInterval(interval);
+      if (cancelled) return;
+
+      setPollingStarted(false);
+      setPollingDocumentId(null);
+      setShowProcessingModal(false);
+
+      alert(
+        error?.response?.data?.message ||
+          error?.response?.data?.errors?.[0] ||
+          "Failed while checking document extraction status."
+      );
+    }
+  }, 1500);
+
+  return () => {
+    cancelled = true;
+    clearInterval(interval);
+  };
+}, [
+  pollingStarted,
+  pollingDocumentId,
+  createdIntakeCase,
+  initiatingDocumentType,
+  initiatingFile,
+]);
+
   useEffect(() => {
-    const anyModalOpen =
-      showCreateModal ||
-      showUploadModal ||
-      showProcessingModal ||
-      showMismatchModal;
+const anyModalOpen =
+  showCreateModal ||
+  showUploadModal ||
+  showProcessingModal ||
+  showMismatchModal ||
+  reviewModalOpen ||
+  showReviewedDataModal ||
+  showCanonicalUpdateModal;
 
     if (anyModalOpen) {
       document.body.classList.add("intake-modal-open");
@@ -315,185 +703,164 @@ function formatIntakeId(id) {
     return () => {
       document.body.classList.remove("intake-modal-open");
     };
-  }, [
-    showCreateModal,
-    showUploadModal,
-    showProcessingModal,
-    showMismatchModal,
-  ]);
+}, [
+  showCreateModal,
+  showUploadModal,
+  showProcessingModal,
+  showMismatchModal,
+  reviewModalOpen,
+  showReviewedDataModal,
+  showCanonicalUpdateModal,
+]);
 
-  useEffect(() => {
-    init();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  async function refreshIntakeQueries() {
+  await queryClient.invalidateQueries({
+    queryKey: ["intake-cases"],
+  });
+}
 
-  useEffect(() => {
-    if (!user || !isStaff(user)) return;
-    fetchIntakeCases();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pagination.page, activeTab]);
+function handleDeleteIntakeCase(item) {
+  const intakeCaseId = item?.id || item?.intake_case_id;
 
-  async function loadProsecutors() {
-    try {
-      const res = await api.get("/staff/prosecutors");
+  if (!intakeCaseId) {
+    return;
+  }
 
-      const payload = res?.data?.data || {};
-      const list =
-        payload.prosecutors ||
-        payload.items ||
-        payload.users ||
-        payload.staff ||
-        [];
+  setIntakeCaseToDelete(item);
+  setShowDeleteConfirmModal(true);
+}
 
-      const normalized = Array.isArray(list)
-        ? list
-            .map((item, index) => ({
-              id:
-                item?.id ??
-                item?.user_id ??
-                item?.prosecutor_id ??
-                item?.staff_id ??
-                item?.value ??
-                `prosecutor-${index}`,
-              name:
-                item?.full_name ||
-                item?.display_name ||
-                item?.name ||
-                [item?.first_name, item?.middle_name, item?.last_name]
-                  .filter(Boolean)
-                  .join(" ")
-                  .trim() ||
-                `Prosecutor ${index + 1}`,
-            }))
-            .filter((item) => item.name)
-        : [];
+async function confirmDeleteIntakeCase() {
+  const intakeCaseId =
+    intakeCaseToDelete?.id || intakeCaseToDelete?.intake_case_id;
 
-      setProsecutorOptions(normalized);
-    } catch (error) {
-      console.error(
-        "Failed to load prosecutors:",
-        error?.response?.data || error
-      );
-      setProsecutorOptions([]);
+  if (!intakeCaseId) return;
+
+  try {
+    setDeletingIntakeCase(true);
+
+    await deleteIntakeCaseMutation.mutateAsync({ intakeCaseId });
+
+    setShowDeleteConfirmModal(false);
+    setShowDeleteSuccessModal(true);
+    setIntakeCaseToDelete(null);
+  } catch (error) {
+  setDeleteErrorModal({
+    isOpen: true,
+    message:
+      error?.response?.data?.message ||
+      error?.response?.data?.errors?.[0] ||
+      "Failed to delete intake case.",
+  });
+} finally {
+    setDeletingIntakeCase(false);
+  }
+}
+
+function closeDeleteConfirmModal() {
+  if (deletingIntakeCase) return;
+  setShowDeleteConfirmModal(false);
+  setIntakeCaseToDelete(null);
+}
+
+function closeDeleteSuccessModal() {
+  setShowDeleteSuccessModal(false);
+}
+
+
+  async function handleApplyCanonicalSelections() {
+  const intakeCaseId =
+    reviewedDocumentPayload?.intakeCase?.id ||
+    reviewedDocumentPayload?.intakeCaseId ||
+    createdIntakeCase?.id;
+
+  if (!intakeCaseId) {
+    alert("Missing intake case reference.");
+    return;
+  }
+
+  try {
+    setApplyingCanonicalUpdates(true);
+
+    const appliedFields = {};
+
+    canonicalCandidates.forEach((item) => {
+      if (canonicalSelections[item.field]) {
+        appliedFields[item.field] = item.proposed_value;
+      }
+    });
+
+    if (Object.keys(appliedFields).length > 0) {
+    await applyCanonicalUpdatesMutation.mutateAsync({
+  intakeCaseId,
+  payload: {
+    applied_fields: appliedFields,
+    source_document_id: canonicalSourceDoc?.id || null,
+    source_document_type: canonicalSourceDoc?.document_type || null,
+  },
+});
     }
+
+    setShowCanonicalUpdateModal(false);
+
+    const nextIntakeCaseId =
+      reviewedDocumentPayload?.intakeCase?.id ||
+      reviewedDocumentPayload?.intakeCaseId ||
+      createdIntakeCase?.id ||
+      null;
+
+    setReadyToConfirmCaseId(nextIntakeCaseId);
+    setShowReviewedDataModal(true);
+
+  } catch (error) {
+    alert(
+      error?.response?.data?.message ||
+      error?.response?.data?.errors?.[0] ||
+      "Failed to apply canonical updates."
+    );
+  } finally {
+    setApplyingCanonicalUpdates(false);
+  }
+}
+
+
+
+useEffect(() => {
+  if (initializedRef.current) return;
+  initializedRef.current = true;
+
+  init();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
+useEffect(() => {
+  console.log("reviewModalOpen:", reviewModalOpen);
+  console.log("selectedReviewDocumentId:", selectedReviewDocumentId);
+}, [reviewModalOpen, selectedReviewDocumentId]);
+
+async function init() {
+  if (!user) {
+    navigate("/");
+    return;
   }
 
-  async function init() {
-    if (!user) {
-      navigate("/");
-      return;
-    }
-
-    try {
-      setPageLoading(true);
-      setErr("");
-
-      const profileRes = await api.get("/my-profile");
-      const freshUser = profileRes.data;
-
-      setStoredUser(freshUser);
-      setUser(freshUser);
-
-      if (isAdminLevel(freshUser)) {
-        navigate("/admin/dashboard");
-        return;
-      }
-
-      if (!isStaff(freshUser)) {
-        navigate("/dashboard");
-        return;
-      }
-
-      await loadProsecutors();
-    } catch (e) {
-      setErr(e?.response?.data?.message || "Failed to load intake cases page.");
-    } finally {
-      setPageLoading(false);
-    }
+  if (isAdminLevel(user)) {
+    navigate("/admin/dashboard");
+    return;
   }
 
-  function openDetailsModal(caseItem) {
-    setSelectedCase(caseItem);
-    setShowDetailsModal(true);
+  if (!isStaff(user)) {
+    navigate("/dashboard");
+    return;
   }
+}
 
-  function closeDetailsModal() {
-    setSelectedCase(null);
-    setShowDetailsModal(false);
-  }
+function openDetailsPage(caseItem) {
+  const intakeCaseId = caseItem?.id || caseItem?.intake_case_id;
+  if (!intakeCaseId) return;
 
-  async function fetchIntakeCases(customPage = pagination.page) {
-    try {
-      setTableLoading(true);
-      setErr("");
-
-const params = {
-  page: customPage,
-  per_page: pagination.per_page || 10,
-  search: filters.search,
-  tab: activeTab,
-};
-
-if (activeTab === "inv") params.case_type = "INV";
-if (activeTab === "inq") params.case_type = "INQ";
-
-      if (filters.search) params.search = filters.search;
-      if (filters.caseType) params.case_type = filters.caseType;
-      if (filters.intakeStatus) params.intake_status = filters.intakeStatus;
-      if (filters.intakeDocumentStatus) {
-        params.intake_document_status = filters.intakeDocumentStatus;
-      }
-      if (filters.prosecutionResult) {
-        params.prosecution_result = filters.prosecutionResult;
-      }
-      if (filters.assignedProsecutor) {
-        params.assigned_prosecutor_id = filters.assignedProsecutor;
-      }
-
-      const res = await api.get("/staff/intake-cases", { params });
-
-      const payload = res?.data?.data || {};
-
-      const extractedRows = Array.isArray(payload)
-        ? payload
-        : payload.intake_cases ||
-          payload.items ||
-          payload.rows ||
-          payload.records ||
-          payload.intakeCases ||
-          [];
-
-      const extractedPagination = payload.pagination || payload.meta || {};
-
-      setRows(Array.isArray(extractedRows) ? extractedRows : []);
-
-      setPagination({
-        page: Number(extractedPagination.page || customPage || 1),
-        per_page: Number(
-          extractedPagination.per_page ||
-            extractedPagination.perPage ||
-            Number(filters.perPage || 10)
-        ),
-        total: Number(extractedPagination.total || extractedRows.length || 0),
-        total_pages: Number(
-          extractedPagination.total_pages ||
-            extractedPagination.totalPages ||
-            1
-        ),
-      });
-    } catch (e) {
-      console.error("fetch intake error:", e?.response?.data || e);
-      setErr(e?.response?.data?.message || "Failed to fetch intake cases.");
-      setRows([]);
-      setPagination((prev) => ({
-        ...prev,
-        total: 0,
-        total_pages: 1,
-      }));
-    } finally {
-      setTableLoading(false);
-    }
-  }
+  navigate(`/staff/intake-cases/${intakeCaseId}`);
+}
 
   function isConfirmedCase(item) {
     const intakeStatus = normalizeText(
@@ -533,7 +900,6 @@ if (activeTab === "inq") params.case_type = "INQ";
     setReviewNotes("");
     setCreatedIntakeCase(null);
     setShowUploadModal(false);
-    setShowUploadSuccessModal(false);
     setUploadedDocumentSummary(null);
     setUploadedInitiatingDocument(null);
     setShowMismatchModal(false);
@@ -542,8 +908,8 @@ if (activeTab === "inq") params.case_type = "INQ";
     setUploadProgress(0);
     setInitiatingDocumentType("");
     setInitiatingFile(null);
-    setProcessingComplete(false);
     setShowCreateModal(true);
+    setUploadFormError("");
   }
 
   function closeCreateModal() {
@@ -551,222 +917,235 @@ if (activeTab === "inq") params.case_type = "INQ";
     setShowCreateModal(false);
   }
 
-  async function handleCreateIntakeCase(e) {
-    e.preventDefault();
+async function handleCreateIntakeCase(e) {
+  e.preventDefault();
 
-    if (!caseType) {
-      alert("Please select a case type.");
-      return;
-    }
-
-    try {
-      setSubmitting(true);
-      setErr("");
-
-      const res = await createIntakeCase({
-        case_type: caseType,
-        review_notes: reviewNotes,
-      });
-
-      const createdCase = res?.data?.data?.intake_case || null;
-
-      if (!createdCase?.id) {
-        throw new Error(
-          "Intake workflow initialized but no intake case ID was returned."
-        );
-      }
-
-      setCreatedIntakeCase(createdCase);
-      setShowCreateModal(false);
-
-      if (caseType === "INV") {
-        setInitiatingDocumentType("complaint_affidavit");
-      } else {
-        setInitiatingDocumentType("");
-      }
-
-      setInitiatingFile(null);
-      setUploadedInitiatingDocument(null);
-      setUploadedDocumentSummary(null);
-      setShowUploadModal(true);
-
-      // Option B: the backend creates only a hidden pre-intake record here.
-      // No need to refresh the list yet because it should not appear until
-      // it becomes a true draft or a confirmed intake case.
-    } catch (error) {
-      alert(
-        error?.response?.data?.message || "Failed to initialize intake workflow."
-      );
-    } finally {
-      setSubmitting(false);
-    }
+  if (!caseType) {
+    alert("Please select a case type.");
+    return;
   }
+
+  try {
+    setSubmitting(true);
+    setStartingWorkflow(true);
+
+    // close current modal immediately
+    setShowCreateModal(false);
+
+    // prepare upload modal immediately
+    if (caseType === "INV") {
+      setInitiatingDocumentType("complaint_affidavit");
+    } else {
+      setInitiatingDocumentType("");
+    }
+
+    setInitiatingFile(null);
+    setUploadedInitiatingDocument(null);
+    setUploadedDocumentSummary(null);
+    setShowUploadModal(true);
+
+    const res = await createIntakeCaseMutation.mutateAsync({
+      case_type: caseType,
+      review_notes: reviewNotes,
+    });
+
+    const createdCase = res?.data?.data?.intake_case || null;
+
+    if (!createdCase?.id) {
+      throw new Error(
+        "Intake workflow initialized but no intake case ID was returned."
+      );
+    }
+
+    setCreatedIntakeCase(createdCase);
+  } catch (error) {
+    setShowUploadModal(false);
+    setShowCreateModal(true);
+
+    alert(
+      error?.response?.data?.message || "Failed to initialize intake workflow."
+    );
+  } finally {
+    setSubmitting(false);
+    setStartingWorkflow(false);
+  }
+}
 
   function closeUploadModal() {
     if (initiatingUploadLoading) return;
     setShowUploadModal(false);
     setShowMismatchModal(false);
     setMismatchInfo(null);
+    setUploadFormError("");
   }
 
-  function closeUploadSuccessModal() {
-    setShowUploadSuccessModal(false);
+function handleMismatchAcknowledge() {
+  setShowMismatchModal(false);
+  setMismatchInfo(null);
+  setShowProcessingModal(false);
+  setUploadProgress(0);
+  setUploadedInitiatingDocument(null);
+  setUploadedDocumentSummary(null);
+  setPollingStarted(false);
+  setPollingDocumentId(null);
+  setInitiatingFile(null);
+  setShowUploadModal(true);
+  setUploadFormError("");
+}
+
+function openReusableReviewModal(documentId) {
+  console.log("Opening review modal:", documentId);
+
+  if (!documentId || typeof documentId === "object") {
+    console.warn("Invalid documentId:", documentId);
+    return;
   }
 
-  function handleMismatchAcknowledge() {
-    setShowMismatchModal(false);
-    setShowProcessingModal(false);
-    setShowUploadSuccessModal(false);
-    setProcessingComplete(false);
-    setUploadProgress(0);
-    setShowUploadModal(true);
-  }
+  setSelectedReviewDocumentId(documentId);
+  setReviewModalOpen(true);
+}
 
-  function openReusableReviewModal(documentId) {
-    setReviewModal({
-      isOpen: true,
-      documentId,
-    });
-  }
-
-  function closeReusableReviewModal() {
-    setReviewModal({
-      isOpen: false,
-      documentId: null,
-    });
-  }
-
-  async function handleSaveDraftFromProcessing() {
-    if (!createdIntakeCase?.id) {
-      setShowProcessingModal(false);
-      setProcessingComplete(false);
-      return;
-    }
-
-    try {
-      setSavingDraft(true);
-      setErr("");
-
-      await saveIntakeCaseDraft(createdIntakeCase.id, {
-  review_notes: reviewNotes || null,
-});
-
-      setShowProcessingModal(false);
-      setProcessingComplete(false);
-      setShowMismatchModal(false);
-      setMismatchInfo(null);
-      setUploadProgress(0);
-      setInitiatingFile(null);
-
-      await fetchIntakeCases(1);
-      setActiveTab("drafts");
-      alert("Intake case saved as draft.");
-    } catch (error) {
-      alert(
-        error?.response?.data?.message ||
-          error?.response?.data?.errors?.[0] ||
-          "Failed to save intake case as draft."
-      );
-    } finally {
-      setSavingDraft(false);
-    }
-  }
+function closeReusableReviewModal() {
+  console.log("closeReusableReviewModal fired");
+  setReviewModalOpen(false);
+  setSelectedReviewDocumentId(null);
+}
 
 
-  async function handleUploadInitiatingDocument(e) {
+async function handleUploadInitiatingDocument(e) {
   e.preventDefault();
 
-  if (!createdIntakeCase?.id) {
-    alert("Missing intake case reference.");
-    return;
-  }
+setUploadFormError("");
 
-  if (!initiatingDocumentType) {
-    alert("Please select the initiating document type.");
-    return;
-  }
+if (!createdIntakeCase?.id) {
+  setUploadFormError("Missing intake case reference.");
+  return;
+}
 
-  if (!initiatingFile) {
-    alert("Please choose a file to upload.");
-    return;
-  }
+if (!initiatingDocumentType) {
+  setUploadFormError("Please select the initiating document type.");
+  return;
+}
+
+if (!initiatingFile) {
+  setUploadFormError("Please choose a file to upload.");
+  return;
+}
 
   try {
     setInitiatingUploadLoading(true);
-    setErr("");
+
     setShowUploadModal(false);
-    setShowUploadSuccessModal(false);
     setShowMismatchModal(false);
     setMismatchInfo(null);
     setShowProcessingModal(true);
-    setProcessingComplete(false);
-    setUploadProgress(20);
-
-    const currentFileName = initiatingFile?.name || "—";
-    const currentFileSize = initiatingFile?.size || 0;
-    const currentDocumentType = initiatingDocumentType;
+    setUploadProgress(15);
 
     const formData = new FormData();
     formData.append("document", initiatingFile);
     formData.append("document_type", initiatingDocumentType);
-    formData.append("upload_mode", "extract");
+    formData.append("upload_mode", "save_only");
+
+    const uploadRes = await uploadInitiatingDocumentMutation.mutateAsync({
+      intakeCaseId: createdIntakeCase.id,
+      formData,
+    });
+
+    const uploadData = uploadRes?.data?.data || {};
+    const uploadedDoc = uploadData?.document || null;
+
+    if (!uploadedDoc?.id) {
+      throw new Error("Upload succeeded but no document ID was returned.");
+    }
 
     setUploadProgress(45);
 
-    const res = await uploadIntakeCaseDocument(createdIntakeCase.id, formData);
-    const uploadedDoc = res?.data?.data?.document || null;
+    const extractRes = await extractInitiatingDocumentMutation.mutateAsync({
+      documentId: uploadedDoc.id,
+    });
 
-    const detectedDocumentType =
-      uploadedDoc?.detected_document_type ||
-      uploadedDoc?.extracted_data?.document_type ||
+    const extractData = extractRes?.data?.data || {};
+    const extractedDocument = extractData?.document || uploadedDoc;
+
+    if (!extractedDocument) {
+      throw new Error("Extraction finished but no document payload was returned.");
+    }
+
+    const rawSelectedType =
+      initiatingDocumentType ||
+      uploadedDoc?.document_type ||
       "";
 
-    const uploadedType = String(currentDocumentType || "")
-      .trim()
-      .toLowerCase();
-    const detectedType = String(detectedDocumentType || "")
-      .trim()
-      .toLowerCase();
+   const rawDetectedType =
+  extractData?.detected_document_type ||
+  extractData?.document_type_detected ||
+  extractData?.document?.detected_document_type ||
+  extractData?.document?.extracted_data?.detected_document_type ||
+  extractData?.document?.extracted_data?.metadata?.document_type ||
+  extractedDocument?.detected_document_type ||
+  extractedDocument?.document_type_detected ||
+  extractedDocument?.classification?.document_type ||
+  extractedDocument?.classifier_result?.document_type ||
+  extractedDocument?.extracted_data?.detected_document_type ||
+  extractedDocument?.extracted_data?.metadata?.document_type ||
+  extractedDocument?.extracted_data?.document_type ||
+  extractedDocument?.extracted_data?.document_class ||
+  "";
 
-    const isMismatch =
-      Boolean(detectedType) &&
-      Boolean(uploadedType) &&
-      detectedType !== uploadedType;
+    const selectedType = normalizeDocumentType(rawSelectedType);
+    const detectedType = normalizeDocumentType(rawDetectedType);
 
-    if (isMismatch) {
+    const extractMismatch =
+      extractData?.is_document_type_mismatch === true ||
+      extractData?.is_mismatch === true ||
+      extractedDocument?.is_document_type_mismatch === true ||
+      extractedDocument?.is_mismatch === true ||
+      (!!selectedType && !!detectedType && selectedType !== detectedType);
+
+    if (extractMismatch) {
       setUploadProgress(100);
-      setProcessingComplete(false);
+      setUploadedInitiatingDocument(null);
+      setUploadedDocumentSummary(null);
+      setPollingStarted(false);
+      setPollingDocumentId(null);
 
-      setMismatchInfo({
-        file_name: uploadedDoc?.uploaded_file_name || currentFileName,
-        file_size: uploadedDoc?.file_size ?? currentFileSize,
-        selected_document_type: currentDocumentType,
-        detected_document_type: detectedDocumentType || "Unknown",
-        message:
-          "Process failed. Failed to save the data because the uploaded document does not match the selected initiating document type. Please check the file and try again.",
-      });
+      setMismatchInfo(
+        buildMismatchInfo(extractedDocument, rawSelectedType, initiatingFile)
+      );
 
+      setShowProcessingModal(false);
       setShowMismatchModal(true);
+      setInitiatingFile(null);
       return;
     }
 
-    setUploadProgress(100);
-    setProcessingComplete(true);
+    setUploadProgress(45);
+    setPollingDocumentId(uploadedDoc.id);
+    setPollingStarted(true);
+    setPollingAttempts(0);
 
-    setUploadedInitiatingDocument(uploadedDoc);
-    setUploadedDocumentSummary(uploadedDoc);
+    setUploadedInitiatingDocument(extractedDocument);
+    setUploadedDocumentSummary(extractedDocument);
     setInitiatingFile(null);
 
-    await fetchIntakeCases(1);
+    return;
   } catch (error) {
     const backendMessage =
       error?.response?.data?.message ||
       error?.response?.data?.errors?.[0] ||
-      "";
+      error?.message ||
+      "Failed to upload initiating document.";
+
+    const errorData = error?.response?.data?.data || {};
+    const errorDocument = errorData?.document || null;
 
     const normalizedMessage = String(backendMessage).toLowerCase();
 
     const isBackendMismatch =
+      errorData?.is_document_type_mismatch === true ||
+      errorData?.is_mismatch === true ||
+      errorDocument?.is_document_type_mismatch === true ||
+      errorDocument?.is_mismatch === true ||
       normalizedMessage.includes("not an initiating document type") ||
       normalizedMessage.includes("does not match") ||
       normalizedMessage.includes("document mismatch") ||
@@ -774,53 +1153,120 @@ if (activeTab === "inq") params.case_type = "INQ";
 
     if (isBackendMismatch) {
       setUploadProgress(100);
-      setProcessingComplete(false);
+      setUploadedInitiatingDocument(null);
+      setUploadedDocumentSummary(null);
+      setPollingStarted(false);
+      setPollingDocumentId(null);
 
-      setMismatchInfo({
-        file_name: initiatingFile?.name || "—",
-        file_size: initiatingFile?.size || 0,
-        selected_document_type: initiatingDocumentType || "—",
-        detected_document_type: "Unknown",
-        message:
-          backendMessage ||
-          "Process failed. Failed to save the data because the uploaded document does not match the selected initiating document type. Please check the file and try again.",
-      });
+     setMismatchInfo(
+  buildMismatchInfo(
+    {
+      ...errorData,
+      ...errorDocument,
+      detected_document_type:
+        errorData?.detected_document_type ||
+        errorDocument?.detected_document_type ||
+        errorDocument?.extracted_data?.detected_document_type ||
+        errorDocument?.extracted_data?.metadata?.document_type ||
+        "",
+    },
+    initiatingDocumentType || "—",
+    initiatingFile
+  )
+);
 
+      setShowProcessingModal(false);
       setShowMismatchModal(true);
       return;
     }
 
     setShowProcessingModal(false);
-    setProcessingComplete(false);
     setShowMismatchModal(false);
     setMismatchInfo(null);
 
-    alert(backendMessage || "Failed to upload initiating document.");
+    alert(backendMessage);
   } finally {
     setInitiatingUploadLoading(false);
   }
 }
 
+
 async function handleReviewSaved(payload) {
   const previousDocumentId =
-    reviewModal.documentId ||
-    payload?.document?.id ||
-    null;
+  selectedReviewDocumentId ||
+  payload?.document?.id ||
+  null;
 
   setLastReviewedDocumentId(previousDocumentId);
-
   closeReusableReviewModal();
+
+  const candidates = Array.isArray(payload?.canonicalUpdateCandidates)
+    ? payload.canonicalUpdateCandidates
+    : [];
+
+  if (candidates.length > 0) {
+    const defaultSelections = {};
+    candidates.forEach((item) => {
+      defaultSelections[item.field] = false;
+    });
+
+    setCanonicalCandidates(candidates);
+    setCanonicalSelections(defaultSelections);
+    setCanonicalSourceDoc(payload?.document || null);
+    setReviewedDocumentPayload(payload);
+    setShowCanonicalUpdateModal(true);
+    return;
+  }
+
   setReviewedDocumentPayload(payload);
 
   const intakeCaseId =
+    payload?.intakeCase?.id ||
     createdIntakeCase?.id ||
     payload?.intakeCaseId ||
     payload?.intake_case_id ||
-    payload?.intake_case?.id ||
     null;
 
   setReadyToConfirmCaseId(intakeCaseId);
   setShowReviewedDataModal(true);
+}
+
+async function handleSaveReviewedAsDraft() {
+  const intakeCaseId =
+    readyToConfirmCaseId ||
+    reviewedDocumentPayload?.intakeCase?.id ||
+    reviewedDocumentPayload?.intakeCaseId ||
+    createdIntakeCase?.id ||
+    null;
+
+  if (!intakeCaseId) {
+    alert("Missing intake case reference.");
+    return;
+  }
+
+  try {
+    setSavingDraft(true);
+
+    await saveDraftMutation.mutateAsync({
+      intakeCaseId,
+      payload: {},
+    });
+
+    setShowReviewedDataModal(false);
+    setReviewedDocumentPayload(null);
+    setReadyToConfirmCaseId(null);
+    setLastReviewedDocumentId(null);
+
+    setActiveTab("drafts");
+  } catch (error) {
+    alert(
+      error?.response?.data?.message ||
+        error?.response?.data?.errors?.[0] ||
+        "Failed to save intake case as draft."
+    );
+  } finally {
+    setSavingDraft(false);
+  }
 }
 
 async function handleConfirmReviewedIntakeCase() {
@@ -831,16 +1277,19 @@ async function handleConfirmReviewedIntakeCase() {
 
   try {
     setConfirmingIntake(true);
-    setErr("");
 
-    await confirmIntakeCase(readyToConfirmCaseId, {});
+    const res = await confirmIntakeCaseMutation.mutateAsync({
+      intakeCaseId: readyToConfirmCaseId,
+      payload: {},
+    });
 
-    setShowReviewedDataModal(false);
-
-    await fetchIntakeCases(1);
+    const confirmedCaseId =
+      res?.data?.data?.intake_case_id || readyToConfirmCaseId;
 
     const confirmedType = normalizeText(
-      createdIntakeCase?.case_type || reviewedDocumentPayload?.document?.case_type
+      createdIntakeCase?.case_type ||
+      reviewedDocumentPayload?.intakeCase?.case_type ||
+      reviewedDocumentPayload?.document?.case_type
     );
 
     if (confirmedType === "inv") {
@@ -851,22 +1300,25 @@ async function handleConfirmReviewedIntakeCase() {
       setActiveTab("all");
     }
 
-setCreatedSuccessInfo({
-  intake_case_id:
-    createdIntakeCase?.intake_case_id ||
-    reviewedDocumentPayload?.intakeCase?.intake_case_id ||
-    "—",
-  message: "Intake case confirmed successfully.",
-});
-setShowReviewedDataModal(false);
-setLastReviewedDocumentId(null);
+    setCreatedSuccessInfo({
+      intake_case_id:
+        reviewedDocumentPayload?.intakeCase?.intake_case_id ||
+        createdIntakeCase?.intake_case_id ||
+        confirmedCaseId,
+      message: "Intake case confirmed successfully.",
+    });
 
+    setShowReviewedDataModal(false);
+    setReviewedDocumentPayload(null);
+    setReadyToConfirmCaseId(null);
+    setLastReviewedDocumentId(null);
     setShowCaseCreatedSuccessModal(true);
   } catch (error) {
     alert(
       error?.response?.data?.message ||
-        error?.response?.data?.errors?.[0] ||
-        "Failed to confirm intake case."
+      error?.response?.data?.errors?.[0] ||
+      error?.message ||
+      "Failed to confirm intake case."
     );
   } finally {
     setConfirmingIntake(false);
@@ -883,6 +1335,8 @@ setLastReviewedDocumentId(null);
   }
 
 function handleResetFilters() {
+  setSearchInput("");
+
   setFilters({
     search: "",
     status: "",
@@ -895,18 +1349,18 @@ function handleResetFilters() {
     sortDirection: "desc",
     perPage: "10",
   });
+
   setPagination((prev) => ({ ...prev, page: 1 }));
 }
 
-  function handleRefreshFilters() {
-    fetchIntakeCases(1);
-  }
+function handleRefreshFilters() {
+  refetchIntakeCases();
+}
 
-  function handleApplyFilters() {
-    setPagination((prev) => ({ ...prev, page: 1 }));
-    fetchIntakeCases(1);
-    setShowFilters(false);
-  }
+function handleApplyFilters() {
+  setPagination((prev) => ({ ...prev, page: 1 }));
+  setShowFilters(false);
+}
 
   const activeFilterEntries = useMemo(
     () =>
@@ -978,39 +1432,75 @@ function handleResetFilters() {
     setPagination((prev) => ({ ...prev, page: prev.page + 1 }));
   }
 
-  function getStatusClass(value = "") {
-    const normalized = normalizeText(value);
 
-    if (
-      normalized.includes("ready") ||
-      normalized.includes("complete") ||
-      normalized.includes("with probable")
-    ) {
-      return "success";
-    }
+  function formatCanonicalFieldLabel(field) {
+  if (!field) return "Field";
 
-    if (
-      normalized.includes("review") ||
-      normalized.includes("confirmation") ||
-      normalized.includes("pending")
-    ) {
-      return "warning";
-    }
+  return String(field)
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
 
-    if (
-      normalized.includes("dismissed") ||
-      normalized.includes("incomplete") ||
-      normalized.includes("without probable")
-    ) {
-      return "danger";
-    }
+function getStatusClass(value = "") {
+  const normalized = normalizeText(value);
 
-    return "neutral";
+  if (
+    normalized.includes("active") ||
+    normalized.includes("ready") ||
+    normalized.includes("complete") ||
+    normalized.includes("with probable")
+  ) {
+    return "success";
   }
+
+  if (
+    normalized.includes("review") ||
+    normalized.includes("confirmation") ||
+    normalized.includes("pending")
+  ) {
+    return "warning";
+  }
+
+  if (
+    normalized.includes("dismissed") ||
+    normalized.includes("incomplete") ||
+    normalized.includes("without probable")
+  ) {
+    return "danger";
+  }
+
+  return "neutral";
+}
 
   if (!user) {
     return <div style={{ padding: 20 }}>Redirecting...</div>;
   }
+
+  function handleDragOver(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  setIsDragActive(true);
+}
+
+function handleDragLeave(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  setIsDragActive(false);
+}
+
+function handleDropInitiatingFile(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  setIsDragActive(false);
+
+  const file = e.dataTransfer?.files?.[0];
+  if (!file) return;
+
+  setInitiatingFile(file);
+  setUploadFormError("");
+}
+  
+
 
   return (
     <UserLayout
@@ -1021,43 +1511,42 @@ function handleResetFilters() {
     >
 
           <div className="intake-page-shell">
-          <div className="intake-actions-row">
-            <div className="intake-actions-left">
-              <button
-                className="intake-toolbar-btn back-btn"
-                onClick={() => navigate("/staff/dashboard")}
-                type="button"
-              >
-                ← Back
-              </button>
-            </div>
+<div className="intake-actions-row">
+  <div className="intake-actions-left">
+    <SearchBar
+      value={searchInput}
+      onSearch={setSearchInput}
+      placeholder="Search docket no., case no., title, offense..."
+      className="intake-page-search"
+      debounceMs={350}
+    />
+  </div>
 
-            <div className="intake-actions-right">
-              <button
-                className="intake-toolbar-btn primary"
-                onClick={openCreateModal}
-                type="button"
-              >
-                + Add New Intake Case
-              </button>
+  <div className="intake-actions-right">
+    <button
+      className="intake-toolbar-btn primary"
+      onClick={openCreateModal}
+      type="button"
+    >
+      + Add New Intake Case
+    </button>
 
-              <button
-                className={`intake-toolbar-btn secondary ${
-                  showFilters ? "is-active" : ""
-                }`}
-                type="button"
-                onClick={() => setShowFilters((prev) => !prev)}
-              >
-                <SlidersHorizontal size={16} />
-                <span>{showFilters ? "Hide Filters" : "Filters"}</span>
-                {activeFilterEntries.length > 0 && (
-                  <span className="intake-toolbar-badge">
-                    {activeFilterEntries.length}
-                  </span>
-                )}
-              </button>
-            </div>
-          </div>
+    <button
+      className={`intake-toolbar-btn secondary ${showFilters ? "is-active" : ""}`}
+      type="button"
+      onClick={() => setShowFilters((prev) => !prev)}
+    >
+      <SlidersHorizontal size={16} />
+      <span>{showFilters ? "Hide Filters" : "Filters"}</span>
+      {activeFilterEntries.length > 0 && (
+        <span className="intake-toolbar-badge">
+          {activeFilterEntries.length}
+        </span>
+      )}
+    </button>
+  </div>
+</div>
+
 
           <div className="intake-workspace-shell">
             <div className="intake-tabs-shell">
@@ -1094,17 +1583,6 @@ function handleResetFilters() {
                   <div className="intake-filters-layout">
                     <div className="intake-filters-shell">
                       <div className="intake-filters-topbar">
-                        <div className="intake-filters-topbar-left">
-                          <div className="intake-filters-eyebrow">
-                            Filter Tools
-                          </div>
-                          <h4>Refine Intake Records</h4>
-                          <p>
-                            Search, narrow, and organize intake case entries
-                            using grouped filter controls.
-                          </p>
-                        </div>
-
                         <div className="intake-filter-toolbar-actions">
                           <div className="intake-filter-count">
                             {activeFilterEntries.length} active
@@ -1178,8 +1656,8 @@ function handleResetFilters() {
                                 type="text"
                                 className="intake-form-control intake-select"
                                 placeholder="Search intake ID, title, complainant..."
-                                value={filters.search}
-                                onChange={handleFilterChange}
+                                value={searchInput}
+onChange={(e) => setSearchInput(e.target.value)}
                               />
                             </div>
                           </div>
@@ -1401,7 +1879,7 @@ function handleResetFilters() {
       <span />
     </div>
 
-    {Array.from({ length: 6 }).map((_, index) => (
+    {Array.from({ length: 5 }).map((_, index) => (
       <div className="intake-loading-table-row" key={index}>
         <span />
         <span />
@@ -1412,24 +1890,26 @@ function handleResetFilters() {
         <span />
       </div>
     ))}
-
-    <div className="intake-loading-message">Loading intake cases...</div>
   </div>
 ) : (
+  
               <div className="intake-table-shell">
-                
+                {isFetching && !tableLoading ? (
+  <div className="small-spinner">Refreshing...</div>
+) : null}
                   <table className="intake-table">
                     <thead>
-                      <tr>
-                        <th>Intake ID</th>
-                        <th>Docket Number</th>
-                        <th>Case Title</th>
-                        <th>Assigned Prosecutor</th>
-                        <th>Intake Status</th>
-                        <th>Actions</th>
-                        <th>Updated At</th>
-                      </tr>
-                    </thead>
+  <tr>
+    <th>Intake ID</th>
+    <th>Docket Number</th>
+    <th>Complainants</th>
+    <th>Respondents</th>
+    <th>Assigned Prosecutor</th>
+    <th>Intake Status</th>
+    <th>Date Filed</th>
+    <th>Actions</th>
+  </tr>
+</thead>
 
                     <tbody>
                       {displayRows.length > 0 ? (
@@ -1440,39 +1920,46 @@ function handleResetFilters() {
 
                           return (
                             <tr key={rowKey}>
-                              <td>{formatIntakeId(item.id)}</td>
-                              <td>{toDisplayValue(item.docket_number, "—")}</td>
-                              <td className="intake-table-title-cell">
-                                {toDisplayValue(item.case_title, "—")}
-                              </td>
-                              <td>{getAssignedProsecutorDisplay(item)}</td>
-                              <td>
-                                <span
-                                  className={`intake-table-status ${getStatusClass(
-                                    intakeStatusValue
-                                  )}`}
-                                >
-                                  {getStatusDisplay(intakeStatusValue, "—")}
-                                </span>
-                              </td>
-                              <td>
-                                <button
-                                        type="button"
-                                        className="intake-table-action-btn"
-                                        onClick={() => navigate(`/staff/intake-cases/${item.id}`)}
-                                          
-                                        
-                                      >
-                                        View Details
-                                      </button>
-                              </td>
-                              <td>{formatDateTime(item.updated_at)}</td>
-                            </tr>
+  <td>{formatIntakeId(item.id || item.intake_case_id)}</td>
+  <td>{toDisplayValue(item.docket_number, "—")}</td>
+  <td>{getPartyDisplay(item.complainants)}</td>
+  <td>{getPartyDisplay(item.respondents)}</td>
+  <td>{getAssignedProsecutorDisplay(item)}</td>
+  <td>
+    <span
+      className={`intake-table-status ${getStatusClass(intakeStatusValue)}`}
+    >
+      {getStatusDisplay(intakeStatusValue, "—")}
+    </span>
+  </td>
+  <td>{formatDateOnly(item.date_filed)}</td>
+  <td>
+    <div className="intake-case-actions">
+      <button
+        type="button"
+        className="icon-action-btn"
+        onClick={() => openDetailsPage(item)}
+        title="Open intake case details"
+      >
+        <Eye size={18} />
+      </button>
+
+      <button
+        type="button"
+        className="icon-action-btn danger"
+        onClick={() => handleDeleteIntakeCase(item)}
+        title="Delete intake case"
+      >
+        <Trash2 size={18} />
+      </button>
+    </div>
+  </td>
+</tr>
                           );
                         })
                       ) : (
                         <tr>
-                          <td colSpan="7" className="intake-table-empty-cell">
+                          <td colSpan="8" className="intake-table-empty-cell">
                             No intake cases found.
                           </td>
                         </tr>
@@ -1568,9 +2055,8 @@ function handleResetFilters() {
           <button
             type="submit"
             className="intake-modal-btn primary"
-            disabled={submitting}
-          >
-            {submitting ? "Starting..." : "Next"}
+            disabled={createIntakeCaseMutation.isPending} >
+{createIntakeCaseMutation.isPending ? "Starting..." : "Next"}
           </button>
         </div>
       </form>
@@ -1578,7 +2064,7 @@ function handleResetFilters() {
   </div>
 )}
 
-{showUploadModal && createdIntakeCase && (
+{showUploadModal && (
   <div className="intake-modal-backdrop">
     <div
       className="intake-modal intake-upload-modal"
@@ -1588,9 +2074,10 @@ function handleResetFilters() {
         <div>
           <h3>Initiating Document Required</h3>
           <p className="intake-upload-subtitle">
-            Upload and extract the initiating document to continue the
-            intake workflow.
-          </p>
+  {startingWorkflow
+    ? "Preparing intake workflow. Please wait..."
+    : "Upload and extract the initiating document to continue the intake workflow."}
+</p>
         </div>
 
         <button
@@ -1610,12 +2097,15 @@ function handleResetFilters() {
                 Initiating Document Type
               </label>
               <select
-                id="initiatingDocumentType"
-                className="intake-form-control"
-                value={initiatingDocumentType}
-                onChange={(e) => setInitiatingDocumentType(e.target.value)}
-                disabled={caseType === "INV"}
-              >
+  id="initiatingDocumentType"
+  className="intake-form-control"
+  value={initiatingDocumentType}
+  onChange={(e) => {
+  setInitiatingDocumentType(e.target.value);
+  setUploadFormError("");
+}}
+  disabled={caseType === "INV" || startingWorkflow}
+>
                 <option value="">Select initiating document</option>
                 {initiatingDocumentOptions.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -1642,15 +2132,27 @@ function handleResetFilters() {
 
               {!initiatingFile ? (
                 <div className="intake-upload-dropzone-card">
-                  <label className="intake-upload-dropzone">
-                    <input
-                      type="file"
-                      accept=".pdf,.jpg,.jpeg,.png"
-                      onChange={(e) =>
-                        setInitiatingFile(e.target.files?.[0] || null)
-                      }
-                      hidden
-                    />
+                  <label
+  className={`intake-upload-dropzone ${isDragActive ? "is-drag-active" : ""}`}
+  onDragOver={handleDragOver}
+  onDragEnter={handleDragOver}
+  onDragLeave={handleDragLeave}
+  onDrop={handleDropInitiatingFile}
+>
+<input
+  type="file"
+  accept=".pdf,.jpg,.jpeg,.png"
+  onChange={(e) => {
+  const nextFile = e.target.files?.[0] || null;
+  setInitiatingFile(nextFile);
+
+  if (nextFile) {
+    setUploadFormError("");
+  }
+}}
+  hidden
+  disabled={startingWorkflow}
+/>
 
                     <div className="intake-upload-dropzone-icon" aria-hidden="true">
                       <svg viewBox="0 0 24 24" fill="none">
@@ -1703,346 +2205,128 @@ function handleResetFilters() {
             </div>
           </div>
         </div>
-
+{uploadFormError && (
+  <div className="intake-form-inline-error" role="alert">
+    {uploadFormError}
+  </div>
+)}
         <div className="intake-modal-footer">
           <button
-            type="button"
-            className="intake-modal-btn secondary"
-            onClick={closeUploadModal}
-            disabled={initiatingUploadLoading}
-          >
+  type="button"
+  className="intake-modal-btn secondary"
+  onClick={closeUploadModal}
+  disabled={initiatingUploadLoading || startingWorkflow}
+>
             Cancel
           </button>
 
           <button
-            type="submit"
-            className="intake-modal-btn primary"
-            disabled={initiatingUploadLoading}
-          >
-            {initiatingUploadLoading
-              ? "Uploading..."
-              : "Upload Initiating Document"}
-          </button>
+  type="submit"
+  className="intake-modal-btn primary"
+  disabled={
+    startingWorkflow ||
+    uploadInitiatingDocumentMutation.isPending ||
+    !createdIntakeCase?.id
+  }
+>
+  {startingWorkflow
+    ? "Preparing..."
+    : uploadInitiatingDocumentMutation.isPending
+    ? "Uploading..."
+    : "Upload Initiating Document"}
+</button>
         </div>
       </form>
     </div>
   </div>
 )}
 
-        {showProcessingModal && (
-          <div className="intake-modal-backdrop">
-            <div
-              className={`intake-modal intake-processing-modal ${
-                showMismatchModal && mismatchInfo ? "is-failed" : ""
-              }`}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="intake-processing-hero">
-                <div
-                  className={`intake-processing-orb ${
-                    showMismatchModal && mismatchInfo
-                      ? "is-failed"
-                      : processingComplete
-                      ? "is-complete"
-                      : ""
-                  }`}
-                />
+{showProcessingModal && !showMismatchModal && (
+  <div className="intake-modal-backdrop">
+    <div
+      className="intake-modal intake-processing-modal"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="intake-processing-hero">
+        <div className="intake-processing-orb" />
 
-                <div className="intake-processing-copy">
-                  <span
-                    className={`intake-processing-badge ${
-                      showMismatchModal && mismatchInfo ? "is-failed" : ""
-                    }`}
-                  >
-                    {showMismatchModal && mismatchInfo
-                      ? "Process Failed"
-                      : processingComplete
-                      ? "Completed"
-                      : "Processing"}
-                  </span>
+        <div className="intake-processing-copy">
+          <span className="intake-processing-badge">
+            Processing
+          </span>
 
-                  <h3>
-                    {showMismatchModal && mismatchInfo
-                      ? "Document Mismatch Detected"
-                      : processingComplete
-                      ? "Extraction Complete"
-                      : "Processing Document Extraction"}
-                  </h3>
+          <h3>Processing Document Extraction</h3>
 
-                  <p className="intake-upload-subtitle">
-                    {showMismatchModal && mismatchInfo
-                      ? "The uploaded file does not match the selected initiating document type."
-                      : processingComplete
-                      ? "Please review the extracted result. Cancelling here will save this record under Intake Drafts."
-                      : "Please wait while the system validates and extracts the initiating document data."}
-                  </p>
-                </div>
-              </div>
+          <p className="intake-upload-subtitle">
+            The document was uploaded successfully. The system is now extracting the document data.
+          </p>
+        </div>
+      </div>
 
-              <div className="intake-modal-body intake-processing-body">
-                <div className="intake-processing-progress-top">
-                  <span className="intake-processing-step">
-                    {showMismatchModal && mismatchInfo
-                      ? "Process failed"
-                      : processingComplete
-                      ? "Completed successfully"
-                      : uploadProgress < 35
-                      ? "Uploading document..."
-                      : uploadProgress < 75
-                      ? "Extracting data..."
-                      : uploadProgress < 100
-                      ? "Finalizing record..."
-                      : "Wrapping up..."}
-                  </span>
+      <div className="intake-modal-body intake-processing-body">
+        <div className="intake-processing-progress-top">
+          <span className="intake-processing-step">
+            {uploadProgress < 35
+              ? "Uploading document..."
+              : uploadProgress < 75
+              ? "Extracting data..."
+              : "Waiting for extraction to complete..."}
+          </span>
 
-                  <strong className="intake-processing-percent">
-                    {showMismatchModal && mismatchInfo
-                      ? "Failed"
-                      : `${uploadProgress}%`}
-                  </strong>
-                </div>
+          <strong className="intake-processing-percent">
+            {`${uploadProgress}%`}
+          </strong>
+        </div>
 
-                <div
-                  className={`intake-processing-bar-shell modern ${
-                    showMismatchModal && mismatchInfo ? "is-failed" : ""
-                  }`}
-                  role="progressbar"
-                  aria-valuenow={uploadProgress}
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-label="Document extraction progress"
-                >
-                  <div
-                    className={`intake-processing-bar-fill modern ${
-                      showMismatchModal && mismatchInfo
-                        ? "is-failed"
-                        : processingComplete
-                        ? "is-complete"
-                        : ""
-                    }`}
-                    style={{
-                      width:
-                        showMismatchModal && mismatchInfo
-                          ? "100%"
-                          : `${uploadProgress}%`,
-                    }}
-                  >
-                    <span className="intake-processing-bar-glow" />
-                  </div>
-                </div>
-
-                {showMismatchModal && mismatchInfo ? (
-                  <div className="intake-processing-review-note intake-processing-failed-note">
-                    <span className="intake-processing-review-label">
-                      Mismatch Details
-                    </span>
-
-                    <div className="intake-upload-success-grid intake-mismatch-grid">
-                      <div className="intake-upload-success-item">
-                        <span>File Name</span>
-                        <strong>{mismatchInfo.file_name || "—"}</strong>
-                      </div>
-
-                      <div className="intake-upload-success-item">
-                        <span>File Size</span>
-                        <strong>
-                          {formatFileSize(mismatchInfo.file_size)}
-                        </strong>
-                      </div>
-
-                      <div className="intake-upload-success-item">
-                        <span>Selected Document Type</span>
-                        <strong>
-                          {mismatchInfo.selected_document_type || "—"}
-                        </strong>
-                      </div>
-
-                      <div className="intake-upload-success-item">
-                        <span>Extracted Document Type</span>
-                        <strong>
-                          {mismatchInfo.detected_document_type || "Unknown"}
-                        </strong>
-                      </div>
-                    </div>
-
-                    <p className="intake-processing-failed-message">
-                      {mismatchInfo.message ||
-                        "Process failed. Failed to save the data because the uploaded document does not match the selected initiating document type. Please check the file and try again."}
-                    </p>
-                  </div>
-                ) : (
-                  <div className="intake-processing-review-note">
-                    <span className="intake-processing-review-label">
-                      {processingComplete ? "Next Step" : "Processing Status"}
-                    </span>
-
-                    <p>
-                      {processingComplete
-                        ? "The extracted data from the initiating document requires review. Review it now, or cancel to save it under Intake Drafts."
-                        : uploadProgress < 35
-                        ? "Uploading the initiating document. Please wait..."
-                      
-                        : "Finalizing the extracted document details..."}
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              <div className="intake-modal-footer">
-                {showMismatchModal && mismatchInfo ? (
-                  <button
-                    type="button"
-                    className="intake-modal-btn primary"
-                    onClick={handleMismatchAcknowledge}
-                  >
-                    OK
-                  </button>
-                ) : !processingComplete ? (
-                  <button
-                    type="button"
-                    className="intake-modal-btn secondary"
-                    disabled
-                  >
-                    Processing...
-                  </button>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="intake-modal-btn secondary"
-                      onClick={handleSaveDraftFromProcessing}
-                      disabled={savingDraft}
-                    >
-                      {savingDraft ? "Saving Draft..." : "Cancel"}
-                    </button>
-
-                    <button
-                      type="button"
-                      className="intake-modal-btn primary"
-                      onClick={() => {
-                        setShowProcessingModal(false);
-                        setProcessingComplete(false);
-
-                        if (uploadedDocumentSummary?.id) {
-                          openReusableReviewModal(uploadedDocumentSummary.id);
-                        }
-                      }}
-                    >
-                      Review
-                    </button>
-                  </>
-                )}
-              </div>
-            </div>
+        <div
+          className="intake-processing-bar-shell modern"
+          role="progressbar"
+          aria-valuenow={uploadProgress}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-label="Document extraction progress"
+        >
+          <div
+            className="intake-processing-bar-fill modern"
+            style={{ width: `${uploadProgress}%` }}
+          >
+            <span className="intake-processing-bar-glow" />
           </div>
-        )}
+        </div>
 
-{showUploadSuccessModal &&
-          uploadedDocumentSummary &&
-          createdIntakeCase && (
-            <div
-              className="intake-modal-backdrop"
-              onClick={closeUploadSuccessModal}
-            >
-              <div
-                className="intake-modal intake-upload-success-modal"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="intake-modal-header">
-                  <div>
-                    <h3>Initiating Document Uploaded</h3>
-                    <p className="intake-upload-subtitle">
-                      Please review the data before confirming this intake case.
-                    </p>
-                  </div>
+        <div className="intake-processing-review-note">
+          <span className="intake-processing-review-label">
+            Processing Status
+          </span>
 
-                  <button
-                    type="button"
-                    className="intake-modal-close"
-                    onClick={closeUploadSuccessModal}
-                  >
-                    ×
-                  </button>
-                </div>
+          <p>
+            {uploadProgress < 35
+              ? "Uploading the initiating document. Please wait..."
+              : "The document is being processed. Please wait while extraction completes..."}
+          </p>
+        </div>
+      </div>
 
-                <div className="intake-modal-body">
-                  <div className="intake-upload-success-card">
-                    <div className="intake-upload-success-title">
-                      Initiating document uploaded successfully
-                    </div>
+      <div className="intake-modal-footer">
+        <button
+          type="button"
+          className="intake-modal-btn secondary"
+          disabled
+        >
+          Processing...
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
-                    <div className="intake-upload-success-grid">
-                      <div className="intake-upload-success-item">
-                        <span>Document Name</span>
-                        <strong>
-                          {uploadedDocumentSummary.uploaded_file_name || "—"}
-                        </strong>
-                      </div>
-
-                      <div className="intake-upload-success-item">
-                        <span>Document Type</span>
-                        <strong>
-                          {uploadedDocumentSummary.document_type_label ||
-                            uploadedDocumentSummary.document_type ||
-                            "—"}
-                        </strong>
-                      </div>
-
-                      <div className="intake-upload-success-item">
-                        <span>File Size</span>
-                        <strong>
-                          {formatFileSize(uploadedDocumentSummary.file_size)}
-                        </strong>
-                      </div>
-
-                      <div className="intake-upload-success-item">
-                        <span>Uploaded At</span>
-                        <strong>
-                          {uploadedDocumentSummary.created_at || "—"}
-                        </strong>
-                      </div>
-                    </div>
-
-                    <div className="intake-upload-review-note">
-                      Please review the extracted data before confirming this intake case.
-                    </div>
-                  </div>
-                </div>
-
-                <div className="intake-modal-footer">
-                  <button
-                    type="button"
-                    className="intake-modal-btn secondary"
-                    onClick={closeUploadSuccessModal}
-                  >
-                    Cancel
-                  </button>
-
-                  <button
-                    type="button"
-                    className="intake-modal-btn primary"
-                    onClick={() => {
-                      setShowUploadSuccessModal(false);
-
-                      if (uploadedDocumentSummary?.id) {
-                        openReusableReviewModal(uploadedDocumentSummary.id);
-                      }
-                    }}
-                  >
-                    Review
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <DocumentReviewModal
-        isOpen={reviewModal.isOpen}
-        documentId={reviewModal.documentId}
-        prosecutorOptions={prosecutorOptions}
-        onClose={closeReusableReviewModal}
-        onSaved={handleReviewSaved}
-      />
+<DocumentReviewModal
+  isOpen={reviewModalOpen}
+  documentId={selectedReviewDocumentId}
+  prosecutorOptions={prosecutorOptions}
+  onClose={closeReusableReviewModal}
+  onSaved={handleReviewSaved}
+/>
 
 <ReviewedDataModal
   isOpen={showReviewedDataModal}
@@ -2058,6 +2342,15 @@ function handleResetFilters() {
   }}
   onConfirm={handleConfirmReviewedIntakeCase}
 />
+
+<DocumentTypeMismatchModal
+  isOpen={showMismatchModal}
+  mismatchInfo={mismatchInfo}
+  onAcknowledge={handleMismatchAcknowledge}
+  onClose={handleMismatchAcknowledge}
+  formatFileSize={formatFileSize}
+/>
+
 
 {showCaseCreatedSuccessModal ? (
   <div
@@ -2100,6 +2393,241 @@ function handleResetFilters() {
 ) : null}
 
       </div>
+
+      {showCanonicalUpdateModal && (
+  <div
+    className="intake-modal-backdrop"
+    onClick={() => setShowCanonicalUpdateModal(false)}
+  >
+    <div
+      className="intake-modal canonical-update-modal"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="intake-modal-header">
+        <div>
+          <h3>Review Canonical Case Updates</h3>
+          <p className="intake-upload-subtitle">
+            This reviewed document contains values that differ from the current canonical case summary.
+            Select which changes should update the intake case.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="intake-modal-close"
+          onClick={() => setShowCanonicalUpdateModal(false)}
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="intake-modal-body">
+        <div className="canonical-update-list">
+          {canonicalCandidates.map((item, index) => (
+            <label
+              key={`${item.field}-${index}`}
+              className="canonical-update-item"
+            >
+              <div className="canonical-update-check">
+                <input
+                  type="checkbox"
+                  checked={!!canonicalSelections[item.field]}
+                  onChange={(e) =>
+                    setCanonicalSelections((prev) => ({
+                      ...prev,
+                      [item.field]: e.target.checked,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="canonical-update-content">
+                <div className="canonical-update-field">
+  {formatCanonicalFieldLabel(item.field)}
+</div>
+                <div>
+                  <strong>Current:</strong> {toDisplayValue(item.current_value, "—")}
+                </div>
+                <div>
+                  <strong>Proposed:</strong> {toDisplayValue(item.proposed_value, "—")}
+                </div>
+                <div>
+                  <strong>From:</strong> {toDisplayValue(item.document_type, "—")} #{toDisplayValue(item.document_id, "—")}
+                </div>
+              </div>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="intake-modal-footer">
+        <button
+          type="button"
+          className="intake-modal-btn secondary"
+          onClick={() => {
+            setShowCanonicalUpdateModal(false);
+            setShowReviewedDataModal(true);
+          }}
+        >
+          Keep Current Values
+        </button>
+
+        <button
+          type="button"
+          className="intake-modal-btn primary"
+          onClick={handleApplyCanonicalSelections}
+          disabled={applyingCanonicalUpdates}
+        >
+          {applyingCanonicalUpdates ? "Applying..." : "Apply Selected Changes"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{showDeleteConfirmModal && (
+  <div className="intake-modal-backdrop" onClick={closeDeleteConfirmModal}>
+    <div
+      className="intake-modal intake-delete-confirm-modal"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="intake-modal-header">
+        <div>
+          <h3>Delete Intake Case</h3>
+          <p className="intake-upload-subtitle">
+            Are you sure you want to delete{" "}
+            <strong>
+              {formatIntakeId(
+                intakeCaseToDelete?.id || intakeCaseToDelete?.intake_case_id
+              )}
+            </strong>
+            ? This action cannot be undone.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="intake-modal-close"
+          onClick={closeDeleteConfirmModal}
+          disabled={deletingIntakeCase}
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="intake-modal-footer intake-delete-confirm-footer">
+        <button
+          type="button"
+          className="intake-modal-btn secondary"
+          onClick={closeDeleteConfirmModal}
+          disabled={deletingIntakeCase}
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          className="intake-modal-btn primary danger"
+          onClick={confirmDeleteIntakeCase}
+          disabled={deletingIntakeCase}
+        >
+          {deletingIntakeCase ? "Deleting..." : "Delete"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{showDeleteSuccessModal && (
+  <div className="intake-modal-backdrop" onClick={closeDeleteSuccessModal}>
+    <div
+      className="intake-modal intake-upload-success-modal"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="intake-modal-header">
+        <div>
+          <h3>Intake Case Deleted</h3>
+          <p className="intake-upload-subtitle">
+            The intake case was deleted successfully.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="intake-modal-close"
+          onClick={closeDeleteSuccessModal}
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="intake-modal-body">
+        <div className="intake-upload-success-card">
+          <div className="intake-upload-success-title">
+            Intake case deleted successfully
+          </div>
+        </div>
+      </div>
+
+      <div className="intake-modal-footer">
+        <button
+          type="button"
+          className="intake-modal-btn primary"
+          onClick={closeDeleteSuccessModal}
+        >
+          OK
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{deleteErrorModal.isOpen && (
+  <div
+    className="intake-modal-backdrop"
+    onClick={() => setDeleteErrorModal({ isOpen: false, message: "" })}
+  >
+    <div
+      className="intake-modal intake-delete-success-modal"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="intake-modal-header">
+        <div>
+          <h3>Delete Failed</h3>
+          <p className="intake-upload-subtitle">
+            The intake case could not be deleted.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="intake-modal-close"
+          onClick={() => setDeleteErrorModal({ isOpen: false, message: "" })}
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="intake-modal-body">
+        <div className="intake-delete-success-copy">
+          {deleteErrorModal.message || "Failed to delete intake case."}
+        </div>
+      </div>
+
+      <div className="intake-modal-footer">
+        <button
+          type="button"
+          className="intake-modal-btn primary"
+          onClick={() => setDeleteErrorModal({ isOpen: false, message: "" })}
+        >
+          OK
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+
     </UserLayout>
   );
 }

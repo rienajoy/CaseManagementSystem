@@ -112,23 +112,30 @@ function normalizeDateForInput(value) {
 }
 
 function buildReviewFormFromDocument(doc, reviewContext = {}) {
-  const mergedDefaults = reviewContext?.merged_review_defaults || {};
-  const extractedMeta = reviewContext?.current_extracted_data || doc?.extracted_data?.metadata || {};
-  const latestSaved = reviewContext?.latest_saved_reviewed_data || {};
   const reviewed = doc?.reviewed_data || {};
+  const editableDefaults = reviewContext?.editable_review_defaults || {};
+  const extractedMeta =
+    reviewContext?.current_extracted_data ||
+    doc?.extracted_data?.metadata ||
+    {};
+
+  const detectedDocumentType =
+    reviewContext?.detected_document_type ||
+    extractedMeta?.document_type ||
+    doc?.detected_document_type ||
+    doc?.document_type ||
+    "";
 
   const base =
     Object.keys(reviewed).length > 0
       ? reviewed
-      : Object.keys(mergedDefaults).length > 0
-      ? mergedDefaults
-      : Object.keys(latestSaved).length > 0
-      ? latestSaved
+      : Object.keys(editableDefaults).length > 0
+      ? editableDefaults
       : extractedMeta;
 
   return {
     ...REVIEW_FORM_DEFAULTS,
-    document_type: doc?.document_type_label || doc?.document_type || "",
+    document_type: detectedDocumentType,
     case_title: base.case_title || "",
     docket_number: base.docket_number || "",
     case_number: base.case_number || "",
@@ -210,23 +217,27 @@ export default function IntakeCaseDetailsReviewedModal({
     return reviewForm.respondents;
   }, [reviewForm.respondents]);
 
-  async function loadDocument() {
-    try {
-      setLoading(true);
-      setErr("");
 
-      const res = await getIntakeCaseDocument(documentId);
-      const doc = res?.data?.data?.document || null;
+  
+async function loadDocument() {
+  try {
+    setLoading(true);
+    setErr("");
 
-      setSelectedDocument(doc);
-      setReviewForm(buildReviewFormFromDocument(doc));
-      setEditMode(false);
-    } catch (e) {
-      setErr(e?.response?.data?.message || "Failed to load reviewed document.");
-    } finally {
-      setLoading(false);
-    }
+    const res = await getIntakeCaseDocument(documentId);
+    const payload = res?.data?.data || {};
+    const doc = payload?.document || null;
+    const reviewContext = payload?.review_context || {};
+
+    setSelectedDocument(doc);
+    setReviewForm(buildReviewFormFromDocument(doc, reviewContext));
+    setEditMode(false);
+  } catch (e) {
+    setErr(e?.response?.data?.message || "Failed to load reviewed document.");
+  } finally {
+    setLoading(false);
   }
+}
 
   function handleFieldChange(key, value) {
     setReviewForm((prev) => ({

@@ -771,7 +771,7 @@ h3 {
 }
 
 .welcome-block {
-  margin-bottom: 18px;
+  margin-bottom: 30px;
 }
 
 .admin-bottom-grid {
@@ -779,6 +779,7 @@ h3 {
   grid-template-columns: 1fr 3fr;
   gap: 16px;
   margin-top: 16px;
+  margin-bottom: 10px;
 }
 
 .admin-side-panels {
@@ -1002,7 +1003,6 @@ h3 {
   width: 100%;
   height: 4px;
 
-  background: linear-gradient(90deg, #7a0f0f, #f4d27a);
   border-top-left-radius: 16px;
   border-top-right-radius: 16px;
 }
@@ -3607,7 +3607,6 @@ h3 {
 .profile-avatar-fallback-large {
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, #eef2ff 0%, #ddd6fe 100%);
   color: #312e81;
   font-weight: 800;
   font-size: 34px;

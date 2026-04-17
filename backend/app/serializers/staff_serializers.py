@@ -6,6 +6,44 @@ from model import User, CaseParty, CaseDocument
 # -----------------------------
 # Serialization helpers
 # -----------------------------
+
+
+# --- Intake case status helpers (local to serializers) ---
+
+def normalize_case_flow_status(value):
+    if value is None:
+        return ""
+
+    # SQLAlchemy / Python Enum support
+    enum_value = getattr(value, "value", None)
+    if enum_value is not None:
+        return str(enum_value).strip().lower()
+
+    text = str(value).strip()
+
+    # Handles strings like "IntakeCaseStatus.ACTIVE"
+    if "." in text:
+        text = text.split(".")[-1]
+
+    return text.lower()
+
+
+def is_official_intake_status(value):
+    """
+    Official/listable intake case states.
+    These should NEVER be downgraded due to additional documents.
+    """
+    return normalize_case_flow_status(value) in {
+        "active",
+        "awaiting_compliance",
+        "under_prosecutor_review",
+        "ready_for_conversion",
+        "resolved_dismissed",
+        "resolved_for_filing",
+        "information_filed",
+        "converted",
+    }
+
 def serialize_user_name(db, user_id):
     if not user_id:
         return None
@@ -70,7 +108,31 @@ def map_official_case_status_label(status):
     }
     return mapping.get(status, status or "Unknown")
 
+
+def map_prosecution_result_label(value):
+    mapping = {
+        "with_probable_cause": "With Probable Cause",
+        "without_probable_cause": "Without Probable Cause",
+        "dismissed": "Dismissed",
+        "none": "None",
+    }
+    return mapping.get(value, (value or "Unknown").replace("_", " ").title())
+
+
+def map_court_result_label(value):
+    mapping = {
+        "none": "None",
+        "dismissed": "Dismissed",
+        "convicted": "Convicted",
+        "acquitted": "Acquitted",
+        "archived": "Archived",
+    }
+    return mapping.get(value, (value or "Unknown").replace("_", " ").title())
+
+
 #case / intake serializers
+
+
 
 
 def serialize_case_document_for_list(db, doc):
@@ -121,10 +183,20 @@ def serialize_case_document_for_list(db, doc):
     
 
 def serialize_case_document(db, doc):
+    document_status_label_map = {
+        "uploaded": "Uploaded",
+        "processing": "Processing",
+        "processed": "Processed",
+        "needs_review": "Needs Review",
+        "reviewed": "Reviewed",
+        "failed": "Failed",
+    }
+
     return {
         "id": doc.id,
         "case_id": doc.case_id,
         "document_type": doc.document_type,
+        "document_type_label": (doc.document_type or "").replace("_", " ").title(),
         "uploaded_file_name": doc.uploaded_file_name,
         "uploaded_file_path": doc.uploaded_file_path,
         "file_mime_type": doc.file_mime_type,
@@ -139,20 +211,27 @@ def serialize_case_document(db, doc):
         "review_notes": doc.review_notes,
         "is_reviewed": doc.is_reviewed,
         "reviewed_by": doc.reviewed_by,
+        "reviewed_by_name": serialize_user_name(db, doc.reviewed_by),
         "reviewed_at": doc.reviewed_at.isoformat() if doc.reviewed_at else None,
         "is_case_applied": doc.is_case_applied,
         "case_applied_at": doc.case_applied_at.isoformat() if doc.case_applied_at else None,
         "document_status": doc.document_status,
+        "document_status_label": document_status_label_map.get(doc.document_status, doc.document_status),
         "document_extraction_id": doc.document_extraction_id,
         "source_intake_case_document_id": doc.source_intake_case_document_id,
         "start_page": doc.start_page,
         "end_page": doc.end_page,
         "source_confidence": doc.source_confidence,
         "source_warnings": doc.source_warnings,
+        "document_date": doc.document_date.isoformat() if doc.document_date else None,
+        "document_group_key": doc.document_group_key,
+        "version_no": doc.version_no,
+        "is_latest": doc.is_latest,
+        "version_status": doc.version_status,
+        "supersedes_document_id": doc.supersedes_document_id,
         "created_at": doc.created_at.isoformat() if doc.created_at else None,
         "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
     }
-
 
 def serialize_intake_case(db, intake_case, include_summary=False):
     payload = {
@@ -176,7 +255,7 @@ def serialize_intake_case(db, intake_case, include_summary=False):
     return payload
 
 
-def serialize_case(case_obj, parties=None, documents=None):
+def serialize_case(db, case_obj, parties=None, documents=None):
     payload = {
         "id": case_obj.id,
         "case_number": case_obj.case_number,
@@ -187,10 +266,11 @@ def serialize_case(case_obj, parties=None, documents=None):
         "filing_date": case_obj.filing_date.isoformat() if case_obj.filing_date else None,
         "receiving_office_id": case_obj.receiving_office_id,
         "assigned_prosecutor_id": case_obj.assigned_prosecutor_id,
-        "created_by": case_obj.created_by,
+        "assigned_prosecutor_name": serialize_user_name(db, case_obj.assigned_prosecutor_id) if case_obj.assigned_prosecutor_id else None,
         "case_origin": case_obj.case_origin,
         "intake_status": case_obj.intake_status,
         "case_status": case_obj.case_status,
+        "case_status_label": map_official_case_status_label(case_obj.case_status),
         "prosecution_result": case_obj.prosecution_result,
         "court_result": case_obj.court_result,
         "custody_result": case_obj.custody_result,
@@ -202,17 +282,25 @@ def serialize_case(case_obj, parties=None, documents=None):
         "latest_document_type": case_obj.latest_document_type,
         "created_at": case_obj.created_at.isoformat() if case_obj.created_at else None,
         "updated_at": case_obj.updated_at.isoformat() if case_obj.updated_at else None,
+        "prosecution_result_label": map_prosecution_result_label(case_obj.prosecution_result),
+        "court_result_label": map_court_result_label(case_obj.court_result),
     }
 
     if parties is not None:
+        complainant_rows = [p for p in parties if p.party_type == "complainant"]
+        respondent_rows = [p for p in parties if p.party_type == "respondent"]
+
         payload["complainants"] = [
             {"id": p.id, "full_name": p.full_name}
-            for p in parties if p.party_type == "complainant"
+            for p in complainant_rows
         ]
         payload["respondents"] = [
             {"id": p.id, "full_name": p.full_name}
-            for p in parties if p.party_type == "respondent"
+            for p in respondent_rows
         ]
+
+        payload["complainant_names"] = [p.full_name for p in complainant_rows]
+        payload["respondent_names"] = [p.full_name for p in respondent_rows]
 
     if documents is not None:
         payload["documents"] = [
@@ -253,6 +341,44 @@ def serialize_case(case_obj, parties=None, documents=None):
     return payload
 
 
+
+def serialize_document_tracking_event(item):
+    return {
+        "id": item.id,
+        "intake_case_id": item.intake_case_id,
+        "related_document_id": item.related_document_id,
+
+        "document_type": item.document_type,
+        "document_type_label": (item.document_type or "").replace("_", " ").title(),
+
+        "action_type": item.action_type,
+        "action_type_label": (item.action_type or "").replace("_", " ").title(),
+        "action_date": item.action_date.isoformat() if item.action_date else None,
+
+        "from_location": item.from_location,
+        "from_office": item.from_office,
+        "from_holder_name": item.from_holder_name,
+
+        "to_location": item.to_location,
+        "to_office": item.to_office,
+        "to_holder_name": item.to_holder_name,
+
+        "purpose": item.purpose,
+        "reason": item.reason,
+        "method": item.method,
+        "reference_no": item.reference_no,
+        "notes": item.notes,
+
+        "acknowledged_at": item.acknowledged_at.isoformat() if item.acknowledged_at else None,
+        "acknowledged_by_name": item.acknowledged_by_name,
+
+        "created_by_id": item.created_by_id,
+        "created_by_name": item.created_by_name,
+
+        "created_at": item.created_at.isoformat() if item.created_at else None,
+        "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+    }
+
 def serialize_document_tracker(item):
     now = datetime.utcnow()
 
@@ -263,7 +389,10 @@ def serialize_document_tracker(item):
     created_at = item.created_at.isoformat() if item.created_at else None
     updated_at = item.updated_at.isoformat() if item.updated_at else None
 
-    is_completed = bool(item.received_date) or str(item.status or "").lower() in {
+    raw_status = getattr(item, "status", None)
+    normalized_status = str(raw_status or "").strip().lower()
+
+    is_completed = bool(item.received_date) or normalized_status in {
         "received",
         "completed",
         "done",
@@ -284,6 +413,29 @@ def serialize_document_tracker(item):
                 is_overdue = True
                 days_delayed = abs(delta_days)
 
+    current_location = (
+        getattr(item, "office_department", None)
+        or getattr(item, "source_location", None)
+        or None
+    )
+
+    current_holder_name = getattr(item, "responsible_party", None)
+
+    if item.received_date:
+        last_action = "received"
+        last_action_at = received_date
+    elif normalized_status in {"completed", "done"}:
+        last_action = "completed"
+        last_action_at = updated_at or created_at
+    elif normalized_status in {"expected", "pending"}:
+        last_action = normalized_status
+        last_action_at = updated_at or created_at
+    else:
+        last_action = raw_status or "updated"
+        last_action_at = updated_at or created_at
+
+    purpose = getattr(item, "remarks", None)
+
     return {
         "id": item.id,
         "intake_case_id": item.intake_case_id,
@@ -295,8 +447,8 @@ def serialize_document_tracker(item):
         "track_type": getattr(item, "tracking_type", None),
         "track_type_label": (getattr(item, "tracking_type", "") or "").replace("_", " ").title(),
 
-        "status": getattr(item, "status", None),
-        "status_label": (getattr(item, "status", "") or "").replace("_", " ").title(),
+        "status": raw_status,
+        "status_label": (raw_status or "").replace("_", " ").title() if raw_status else None,
 
         "source_location": getattr(item, "source_location", None),
         "office_department": getattr(item, "office_department", None),
@@ -310,7 +462,6 @@ def serialize_document_tracker(item):
         "received_date": received_date,
 
         "remarks": getattr(item, "remarks", None),
-
         "related_document_id": getattr(item, "related_document_id", None),
 
         "is_completed": is_completed,
@@ -318,10 +469,16 @@ def serialize_document_tracker(item):
         "days_remaining": days_remaining,
         "days_delayed": days_delayed,
 
+        "current_location": current_location,
+        "current_holder_name": current_holder_name,
+        "last_action": last_action,
+        "last_action_label": (last_action or "").replace("_", " ").title() if last_action else None,
+        "last_action_at": last_action_at,
+        "purpose": purpose,
+
         "created_at": created_at,
         "updated_at": updated_at,
     }
-
 
 
 def serialize_dashboard_case_row(case_obj):
@@ -502,6 +659,8 @@ def serialize_intake_case_document(db, doc):
         "intake_case_id": doc.intake_case_id,
         "document_type": doc.document_type,
         "document_type_label": (doc.document_type or "").replace("_", " ").title(),
+        "detected_document_type": getattr(doc, "detected_document_type", None),
+        "is_document_type_mismatch": getattr(doc, "is_document_type_mismatch", False),
         "uploaded_file_name": doc.uploaded_file_name,
         "uploaded_file_path": doc.uploaded_file_path,
         "file_mime_type": doc.file_mime_type,
@@ -548,37 +707,96 @@ def build_intake_case_view(db, intake_case):
         summarize_intake_case_from_documents,
         compute_intake_document_status,
         build_missing_documents_summary,
+        get_latest_saved_reviewed_data_for_intake_case,
     )
 
-    summary = intake_case.extracted_data or summarize_intake_case_from_documents(db, intake_case.id)
-    intake_document_status = compute_intake_document_status(db, intake_case)
+    summary = intake_case.extracted_data or summarize_intake_case_from_documents(db, intake_case.id) or {}
+    latest_reviewed_data = get_latest_saved_reviewed_data_for_intake_case(db, intake_case.id) or {}
+
+    raw_status = normalize_case_flow_status(intake_case.intake_status)
+
+    if is_official_intake_status(raw_status):
+        intake_document_status = "completed"
+    else:
+        intake_document_status = compute_intake_document_status(db, intake_case)
+
+    safe_snapshot = summary if isinstance(summary, dict) else {}
+
+    snapshot_assigned_prosecutor_id = (
+        safe_snapshot.get("assigned_prosecutor_id")
+        or latest_reviewed_data.get("assigned_prosecutor_id")
+    )
+
+    snapshot_assigned_prosecutor_name = (
+        serialize_user_name(db, snapshot_assigned_prosecutor_id)
+        if snapshot_assigned_prosecutor_id
+        else None
+    )
+
+    assigned_prosecutor_name = (
+        snapshot_assigned_prosecutor_name
+        or safe_snapshot.get("assigned_prosecutor")
+        or latest_reviewed_data.get("assigned_prosecutor")
+        or serialize_user_name(db, intake_case.assigned_prosecutor_id)
+        or None
+    )
+
+    complainants_value = (
+        latest_reviewed_data.get("complainants")
+        or safe_snapshot.get("complainants")
+        or []
+    )
+
+    respondents_value = (
+        latest_reviewed_data.get("respondents")
+        or safe_snapshot.get("respondents")
+        or []
+    )
 
     return {
         "id": intake_case.id,
         "intake_case_id": f"INT-{intake_case.id:06d}",
         "case_type": intake_case.case_type,
-        "date_filed": summary.get("date_filed"),
-        "docket_number": summary.get("docket_number"),
-        "case_number": summary.get("case_number"),
-        "complainants": summary.get("complainants", []),
-        "respondents": summary.get("respondents", []),
-        "offense_or_violation": summary.get("offense_or_violation"),
-        "case_title": summary.get("case_title"),
-        "assigned_prosecutor": summary.get("assigned_prosecutor"),
-        "assigned_prosecutor_id": summary.get("assigned_prosecutor_id"),
-        "resolution_date": summary.get("resolution_date"),
-        "filed_in_court_date": summary.get("filed_in_court_date"),
-        "court_branch": summary.get("court_branch"),
-        "case_status": summary.get("case_status"),
-        "prosecution_result": summary.get("prosecution_result"),
-        "court_result": summary.get("court_result"),
+
+        # display only canonical or reviewed values, not raw extracted fallback
+        "date_filed": intake_case.date_filed.isoformat() if intake_case.date_filed else None,
+        "docket_number": intake_case.docket_number or None,
+        "case_number": intake_case.case_number or None,
+
+        "complainants": complainants_value,
+        "respondents": respondents_value,
+
+        "offense_or_violation": intake_case.offense_or_violation or latest_reviewed_data.get("offense_or_violation") or None,
+        "case_title": intake_case.case_title or latest_reviewed_data.get("case_title") or None,
+
+        "assigned_prosecutor": assigned_prosecutor_name,
+        "assigned_prosecutor_id": (
+            snapshot_assigned_prosecutor_id
+            or intake_case.assigned_prosecutor_id
+            or None
+        ),
+
+        "resolution_date": intake_case.resolution_date.isoformat() if intake_case.resolution_date else None,
+        "filed_in_court_date": intake_case.filed_in_court_date.isoformat() if intake_case.filed_in_court_date else None,
+        "court_branch": intake_case.court_branch or latest_reviewed_data.get("court_branch") or None,
+
+        "case_status": latest_reviewed_data.get("case_status") or summary.get("case_status"),
+        "prosecution_result": intake_case.prosecution_result or latest_reviewed_data.get("prosecution_result") or None,
+        "court_result": intake_case.court_result or latest_reviewed_data.get("court_result") or None,
+
         "review_flags": summary.get("review_flags", []),
         "warnings": summary.get("warnings", []),
+
         "intake_status": intake_case.intake_status,
+        "summary_field_sources": summary.get("summary_field_sources", {}),
+        "summary_conflicts": summary.get("summary_conflicts", []),
+
         "intake_document_status": intake_document_status,
         "intake_status_label": map_intake_status_label(intake_case.intake_status),
         "intake_document_status_label": map_intake_document_status_label(intake_document_status),
+
         "missing_documents": build_missing_documents_summary(intake_case, summary),
+
         "review_notes": intake_case.review_notes,
         "created_by": intake_case.created_by,
         "received_by": intake_case.received_by,
@@ -588,6 +806,8 @@ def build_intake_case_view(db, intake_case):
         "converted_case_id": intake_case.converted_case_id,
         "converted_at": intake_case.converted_at.isoformat() if intake_case.converted_at else None,
     }
+
+
 
 def build_case_view(db, case_obj, include_parties=False, include_documents=False):
     parties = None
@@ -609,7 +829,7 @@ def build_case_view(db, case_obj, include_parties=False, include_documents=False
             .all()
         )
 
-    payload = serialize_case(case_obj, parties=parties, documents=documents)
+    payload = serialize_case(db, case_obj, parties=parties, documents=documents)
     payload["case_status_label"] = map_official_case_status_label(case_obj.case_status)
     return payload
 

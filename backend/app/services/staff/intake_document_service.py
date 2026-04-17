@@ -231,24 +231,75 @@ def apply_pipeline_result_to_intake_document(db, intake_case, document, pipeline
     extracted_documents = pipeline_result["documents"]
     primary_document = pipeline_result["primary_document"]
 
+    def normalize_status(value):
+        if value is None:
+            return ""
+        enum_value = getattr(value, "value", None)
+        if enum_value is not None:
+            return str(enum_value).strip().lower()
+        text = str(value).strip()
+        if "." in text:
+            text = text.split(".")[-1]
+        return text.lower()
+
+    def normalize_type(value):
+        if not value:
+            return ""
+        return str(value).strip().lower()
+
+    official_statuses = {
+        "active",
+        "awaiting_compliance",
+        "under_prosecutor_review",
+        "ready_for_conversion",
+        "resolved_dismissed",
+        "resolved_for_filing",
+        "information_filed",
+        "converted",
+    }
+
+    current_status = normalize_status(intake_case.intake_status)
+    is_official_case = current_status in official_statuses
+
     document.start_page = primary_document.get("start_page") if primary_document else None
     document.end_page = primary_document.get("end_page") if primary_document else None
 
     if not primary_document:
         document.ocr_text = raw_text
-        document.extracted_data = None
+        document.extracted_data = {
+            "raw_text": raw_text,
+            "clean_text": clean_text,
+            "pages": pages,
+            "documents": extracted_documents,
+            "primary_document": None,
+            "metadata": {},
+            "confidence": {},
+            "warnings": ["No extractable document metadata found."],
+            "detected_document_type": None,
+            "is_document_type_mismatch": False,
+        }
+        document.detected_document_type = None
+        document.is_document_type_mismatch = False
         document.ocr_status = "completed"
         document.nlp_status = "failed"
         document.document_status = "needs_review"
         document.has_extraction_issues = True
         document.review_priority = "high"
         document.review_notes = "No extractable document metadata found."
-        intake_case.intake_status = "needs_review"
+
+        if not is_official_case:
+            intake_case.intake_status = "needs_review"
         return
 
     metadata = primary_document.get("extracted_metadata", {}) or {}
     confidence = primary_document.get("confidence", {}) or {}
     warnings = primary_document.get("warnings", []) or []
+
+    detected_type = primary_document.get("document_type") if primary_document else None
+    document.detected_document_type = detected_type
+    document.is_document_type_mismatch = (
+        normalize_type(document.document_type) != normalize_type(detected_type)
+    )
 
     metadata["complainants"] = normalize_to_list(metadata.get("complainants"))
     metadata["respondents"] = normalize_to_list(metadata.get("respondents"))
@@ -266,11 +317,13 @@ def apply_pipeline_result_to_intake_document(db, intake_case, document, pipeline
         "metadata": metadata,
         "confidence": confidence,
         "warnings": warnings,
+        "detected_document_type": detected_type,
+        "is_document_type_mismatch": document.is_document_type_mismatch,
     }
     document.ocr_status = "completed"
     document.nlp_status = "completed"
     document.has_extraction_issues = review_state["has_extraction_issues"]
-    document.review_priority = review_state["review_priority"]
+    document.review_priority = review_state.get("review_priority") or "medium"
     document.document_status = review_state["document_status"]
     document.review_notes = " | ".join(warnings) if warnings else None
 
@@ -279,11 +332,15 @@ def apply_pipeline_result_to_intake_document(db, intake_case, document, pipeline
     document.reviewed_by = None
     document.reviewed_at = None
 
-    summary = summarize_intake_case_from_documents(db, intake_case.id)
+    summary = summarize_intake_case_from_documents(db, intake_case.id) or {}
     intake_case.extracted_data = summary
-    intake_case.intake_status = "needs_review"
+
+    if not is_official_case:
+        intake_case.intake_status = "needs_review"
 
     sync_missing_document_trackers(db, intake_case, current_user_id)
+
+
 
 def is_versioned_document_type(document_type: str) -> bool:
     return document_type in VERSIONED_DOCUMENT_TYPES

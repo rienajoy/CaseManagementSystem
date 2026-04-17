@@ -54,7 +54,14 @@ body,
   transition: width 0.28s ease, transform 0.28s ease;
   border-right: none !important;
   box-shadow: none !important;
-  background: #3e1318 !important;
+ background: linear-gradient(
+  135deg,
+  #7a4a47 0%,
+  #5a1f22 50%,
+  #2a0b0d 100%
+) !important;
+backdrop-filter: blur(10px) !important;
+border-radius: 2px;
 }
 
 /* MAIN */
@@ -85,6 +92,7 @@ body,
   flex-shrink: 0;
   display: flex;
   background: #fff8f8 !important;
+  
 }
 
 /* CONTENT */
@@ -131,10 +139,22 @@ body,
   align-items: center;
   justify-content: center;
   background: rgba(127, 29, 29, 0.28) !important;
-  color: black;
-  font-size: 10px !important;
+  color: grey;
+  font-size: 7px !important;
   position: relative;
   z-index: 5;
+  width: 100% !important;
+
+    position: sticky;
+  top: 0;
+  z-index: 900;
+  width: 100%;
+
+  margin: 0 !important;
+
+
+
+  background: #fff8f8 !important;
 }
 
 /* overlay */

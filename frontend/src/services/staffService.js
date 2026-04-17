@@ -4,6 +4,7 @@ import api from "../api";
 
 
 
+
 function buildQuery(params = {}) {
   const searchParams = new URLSearchParams();
 
@@ -95,9 +96,8 @@ export function getIntakeCaseDocument(documentId) {
   return api.get(`/staff/intake-case-documents/${documentId}`);
 }
 
-export function extractIntakeCaseDocument(documentId, forceReextract = false) {
-  const query = forceReextract ? "?force_reextract=true" : "";
-  return api.post(`/staff/intake-case-documents/${documentId}/extract${query}`);
+export async function extractIntakeCaseDocument(documentId) {
+  return api.post(`/staff/intake-case-documents/${documentId}/extract`);
 }
 
 export function reviewIntakeCaseDocument(documentId, data) {
@@ -171,6 +171,13 @@ export function getIntakeCaseAuditLogs(intakeCaseId) {
   return api.get(`/staff/intake-cases/${intakeCaseId}/audit-logs`);
 }
 
+
+/* convert intake case into official case*/
+
+export async function convertIntakeCaseToOfficial(intakeCaseId) {
+  return api.post(`/staff/intake-cases/${intakeCaseId}/convert`);
+}
+
 /* -----------------------------
  * Official cases
  * ----------------------------- */
@@ -185,6 +192,8 @@ export function getOfficialCaseById(caseId) {
 export function updateOfficialCase(caseId, data) {
   return api.patch(`/staff/cases/${caseId}`, data);
 }
+
+
 
 /* -----------------------------
  * Official case documents
@@ -306,4 +315,17 @@ export function getLegacyCaseStats() {
  * ----------------------------- */
 export function getStaffAuditLogs(params = {}) {
   return api.get(`/staff/audit-logs${buildQuery(params)}`);
+}
+
+export function getIntakeCaseDocumentTrackingEvents(intakeCaseId, params = {}) {
+  return api.get(`/staff/intake-cases/${intakeCaseId}/document-tracking-events`, {
+    params,
+  });
+}
+
+export function createIntakeCaseDocumentTrackingEvent(intakeCaseId, payload) {
+  return api.post(
+    `/staff/intake-cases/${intakeCaseId}/document-tracking-events`,
+    payload
+  );
 }

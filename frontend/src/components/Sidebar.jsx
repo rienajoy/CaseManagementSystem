@@ -100,7 +100,7 @@ export default function Sidebar({
         </button>
       )}
 
-      <div className="sidebar-shell">
+      
         <div className="sidebar-top">
           <div className="sidebar-top-row">
             <div className="sidebar-brand">
@@ -132,6 +132,27 @@ export default function Sidebar({
               </button>
             )}
           </div>
+                <div className="sidebar-header-card">
+        <div className="sidebar-header-avatar">
+          {user?.profile_pic ? (
+            <img
+              src={`http://127.0.0.1:5000/${user.profile_pic}`}
+              alt="Profile"
+              className="sidebar-profile-img"
+            />
+          ) : (
+            <span>{user?.first_name?.[0] || "U"}</span>
+          )}
+        </div>
+
+        <div className="sidebar-header-name">
+          {user?.first_name} {user?.last_name}
+        </div>
+
+        <div className="sidebar-header-subtext">
+          {user?.email || user?.role}
+        </div>
+      </div>
 
 
         </div>
@@ -171,7 +192,7 @@ export default function Sidebar({
             {isOpen && <span>Log Out</span>}
           </button>
         </div>
-      </div>
+      
     </aside>
   );
 }

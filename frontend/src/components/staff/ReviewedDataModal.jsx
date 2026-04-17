@@ -16,6 +16,7 @@ export default function ReviewedDataModal({
   intakeCaseId ||
   "—";
 
+  
   const complainantsText = useMemo(() => {
     return Array.isArray(reviewedData?.complainants) &&
       reviewedData.complainants.length > 0

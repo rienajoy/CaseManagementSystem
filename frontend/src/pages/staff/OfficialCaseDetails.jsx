@@ -1,167 +1,328 @@
-//src/pages/staff/OfficialCaseDetails.jsx
-
-import { useEffect, useState } from "react";
+// src/pages/staff/OfficialCaseDetails.jsx
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
-
 import UserLayout from "../../components/UserLayout";
 import { getStoredUser } from "../../utils/storage";
 import { getOfficialCaseById } from "../../services/staffService";
-
-import "../../styles/dashboard.css";
+import "../../styles/staff/intake-case-details-page.css";
 
 export default function OfficialCaseDetails() {
   const { caseId } = useParams();
   const user = getStoredUser();
 
-  const [item, setItem] = useState(null);
+  const [activeTopTab, setActiveTopTab] = useState("case-details");
+  const [record, setRecord] = useState(null);
+  const [latestDocuments, setLatestDocuments] = useState([]);
+  const [documentHistory, setDocumentHistory] = useState([]);
+  const [courtEvents, setCourtEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    loadCase();
+    loadDetails();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [caseId]);
 
-  async function loadCase() {
+  async function loadDetails() {
     try {
       setLoading(true);
       setErr("");
+
       const res = await getOfficialCaseById(caseId);
-      setItem(res?.data?.data?.case || null);
-    } catch (e) {
-      setErr(e?.response?.data?.message || "Failed to load official case details.");
+      const data = res?.data?.data || {};
+
+      setRecord(data.case || null);
+      setLatestDocuments(Array.isArray(data.latest_documents) ? data.latest_documents : []);
+      setDocumentHistory(Array.isArray(data.document_history) ? data.document_history : []);
+      setCourtEvents(Array.isArray(data.court_events) ? data.court_events : []);
+    } catch (error) {
+      console.error("Failed to load official case details:", error);
+      setErr(error?.response?.data?.message || "Failed to load official case.");
     } finally {
       setLoading(false);
     }
   }
 
-  if (!user) {
-    return <div style={{ padding: 20 }}>Redirecting...</div>;
+  function formatLabel(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value).replaceAll("_", " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+}
+
+  function toDisplayValue(value, fallback = "—") {
+    if (value === null || value === undefined || value === "") return fallback;
+    if (Array.isArray(value)) return value.join(", ") || fallback;
+    return String(value);
   }
 
+  function formatDateOnly(value) {
+    if (!value) return "—";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleDateString();
+  }
+
+const summaryData = useMemo(() => ({
+  caseNumber: record?.case_number,
+  docketNumber: record?.docket_number,
+  caseTitle: record?.case_title,
+  offenseOrViolation: record?.offense_or_violation,
+  assignedProsecutor:
+    record?.assigned_prosecutor_name ||
+    record?.assigned_prosecutor_label ||
+    record?.assigned_prosecutor,
+  caseStatus: record?.case_status_label || record?.case_status,
+  prosecutionResult: record?.prosecution_result,
+  courtResult: record?.court_result,
+  filingDate: record?.filing_date,
+  filedInCourtDate: record?.filed_in_court_date,
+  resolutionDate: record?.resolution_date,
+  courtBranch: record?.court_branch,
+  complainants: Array.isArray(record?.complainants)
+    ? record.complainants.map((item) => item?.full_name || item).filter(Boolean).join(", ")
+    : record?.complainants,
+  respondents: Array.isArray(record?.respondents)
+    ? record.respondents.map((item) => item?.full_name || item).filter(Boolean).join(", ")
+    : record?.respondents,
+  caseOrigin: record?.case_origin,
+  sourceIntakeCaseId: record?.source_intake_case_id,
+}), [record]);
+
+  if (!user) return <div style={{ padding: 20 }}>Redirecting...</div>;
+
   return (
-    <UserLayout user={user}>
-      <div className="welcome-block">
-        <div className="page-badge">Official Case</div>
-        <h1>Official Case Details</h1>
-        <p className="subtitle">
-          Review the converted official case record and its related documents.
-        </p>
-      </div>
+    <UserLayout
+      user={user}
+      sectionBadge="OFFICIAL CASE DETAILS"
+      pageTitle="Official Case Details"
+      pageSubtitle="Review case summary, documents, and court events."
+    >
+      <div className="intake-details-page">
+        {err && <div className="intake-details-alert error">{err}</div>}
 
-      {err && <div className="alert alert-error">{err}</div>}
+        {loading ? (
+          <div className="intake-details-empty">Loading official case details...</div>
+        ) : !record ? (
+          <div className="intake-details-empty">Official case not found.</div>
+        ) : (
+          <div className="intake-details-wide-layout">
+            <div className="intake-top-row">
+              <div className="intake-hero-stack">
+                <div className="intake-top-tabs-shell">
+                  <div className="intake-top-tabs">
+                    <button
+                      type="button"
+                      className={`intake-top-tab ${activeTopTab === "case-details" ? "active" : ""}`}
+                      onClick={() => setActiveTopTab("case-details")}
+                    >
+                      <span>Case Details</span>
+                    </button>
 
-      {loading ? (
-        <div className="panel">
-          <div className="empty">Loading official case details...</div>
-        </div>
-      ) : !item ? (
-        <div className="panel">
-          <div className="empty">Official case not found.</div>
-        </div>
-      ) : (
-        <>
-          <div className="cards" style={{ marginBottom: 18 }}>
-            <div className="stat-card stat-blue">
-              <div className="stat-title">Case Number</div>
-              <div className="stat-value">{item.case_number || "-"}</div>
-            </div>
+                    <button
+                      type="button"
+                      className={`intake-top-tab ${activeTopTab === "documents" ? "active" : ""}`}
+                      onClick={() => setActiveTopTab("documents")}
+                    >
+                      <span>Documents ({latestDocuments.length})</span>
+                    </button>
 
-            <div className="stat-card stat-green">
-              <div className="stat-title">Docket Number</div>
-              <div className="stat-value">{item.docket_number || "-"}</div>
-            </div>
-
-            <div className="stat-card stat-gold">
-              <div className="stat-title">Case Type</div>
-              <div className="stat-value">{item.case_type || "-"}</div>
-            </div>
-
-            <div className="stat-card stat-red">
-              <div className="stat-title">Case Status</div>
-              <div className="stat-value">{item.case_status || "-"}</div>
-            </div>
-          </div>
-
-          <div className="grid">
-            <div className="panel">
-              <div className="panel-header">
-                <h3>Case Summary</h3>
-              </div>
-
-              <div className="notes" style={{ marginTop: 12 }}>
-                <p><strong>Case Title:</strong> {item.case_title || "-"}</p>
-                <p><strong>Offense / Violation:</strong> {item.offense_or_violation || "-"}</p>
-                <p><strong>Filing Date:</strong> {item.filing_date || "-"}</p>
-                <p><strong>Intake Status:</strong> {item.intake_status || "-"}</p>
-                <p><strong>Prosecution Result:</strong> {item.prosecution_result || "-"}</p>
-                <p><strong>Court Result:</strong> {item.court_result || "-"}</p>
-                <p><strong>Court Branch:</strong> {item.court_branch || "-"}</p>
-                <p><strong>Resolution Date:</strong> {item.resolution_date || "-"}</p>
-                <p><strong>Filed in Court Date:</strong> {item.filed_in_court_date || "-"}</p>
-                <p><strong>Case Origin:</strong> {item.case_origin || "-"}</p>
-              </div>
-            </div>
-
-            <div className="panel">
-              <div className="panel-header">
-                <h3>Parties</h3>
-              </div>
-
-              <div className="notes" style={{ marginTop: 12 }}>
-                <p>
-                  <strong>Complainants:</strong>{" "}
-                  {(item.complainants || []).length
-                    ? item.complainants.map((p) => p.full_name).join(", ")
-                    : "-"}
-                </p>
-                <p>
-                  <strong>Respondents:</strong>{" "}
-                  {(item.respondents || []).length
-                    ? item.respondents.map((p) => p.full_name).join(", ")
-                    : "-"}
-                </p>
-              </div>
-            </div>
-
-            <div className="panel">
-              <div className="panel-header">
-                <h3>Official Case Documents</h3>
-              </div>
-
-              {!(item.documents || []).length ? (
-                <div className="empty">No case documents found.</div>
-              ) : (
-                <div className="manage-users-table-wrap">
-                  <table className="manage-users-table">
-                    <thead>
-                      <tr>
-                        <th>Type</th>
-                        <th>File Name</th>
-                        <th>Status</th>
-                        <th>Reviewed</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {item.documents.map((doc) => (
-                        <tr key={doc.id}>
-                          <td>{doc.document_type || "-"}</td>
-                          <td>{doc.uploaded_file_name || "-"}</td>
-                          <td>{doc.document_status || "-"}</td>
-                          <td>{doc.is_reviewed ? "Yes" : "No"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                    <button
+                      type="button"
+                      className={`intake-top-tab ${activeTopTab === "court-events" ? "active" : ""}`}
+                      onClick={() => setActiveTopTab("court-events")}
+                    >
+                      <span>Court Events ({courtEvents.length})</span>
+                    </button>
+                  </div>
                 </div>
-              )}
+
+                {activeTopTab === "case-details" && (
+                  <div className="intake-case-hero-card">
+                    <div className="intake-case-hero-topbar">
+                      <div className="intake-case-dockets-inline">
+                        <span className="intake-case-docket-pill">
+                          <span className="intake-case-docket-pill-label">DOCKET NO.:</span>
+                          {toDisplayValue(summaryData.docketNumber)}
+                        </span>
+
+                        <span className="intake-case-docket-pill">
+                          <span className="intake-case-docket-pill-label">CASE NO.:</span>
+                          {toDisplayValue(summaryData.caseNumber)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="intake-case-top-grid">
+                      <div className="case-title-card">
+                        <strong>{toDisplayValue(summaryData.caseTitle)}</strong>
+                      </div>
+
+                      <div className="case-top-right-grid">
+                        <div className="summary-box">
+                          <span>OFFENSE/VIOLATION</span>
+                          <strong>{toDisplayValue(summaryData.offenseOrViolation)}</strong>
+                        </div>
+                        <div className="summary-box">
+                          <span>CASE STATUS</span>
+                          <strong>{toDisplayValue(summaryData.caseStatus)}</strong>
+                        </div>
+                        <div className="summary-box">
+                          <span>ASSIGNED PROSECUTOR</span>
+                          <strong>{toDisplayValue(summaryData.assignedProsecutor)}</strong>
+                        </div>
+                        <div className="summary-box">
+                          <span>FILING DATE</span>
+                          <strong>{formatDateOnly(summaryData.filingDate)}</strong>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="intake-case-lower-grid">
+                      <div className="summary-box">
+                        <span>RESOLUTION DATE</span>
+                        <strong>{formatDateOnly(summaryData.resolutionDate)}</strong>
+                      </div>
+                      <div className="summary-box">
+                        <span>PROSECUTION RESULT</span>
+                        <strong>{formatLabel(summaryData.prosecutionResult)}</strong>
+                      </div>
+                      <div className="summary-box">
+                        <span>INFORMATION DATE FILED</span>
+                        <strong>{formatDateOnly(summaryData.filedInCourtDate)}</strong>
+                      </div>
+                    </div>
+
+                    <div className="intake-case-last-row">
+                      <div className="summary-box">
+                        <span>RESPONDENTS</span>
+                        <strong>{toDisplayValue(summaryData.respondents)}</strong>
+                      </div>
+                      <div className="summary-box">
+                        <span>COMPLAINANTS</span>
+                        <strong>{toDisplayValue(summaryData.complainants)}</strong>
+                      </div>
+                    </div>
+
+                    <div className="intake-case-last-row">
+                      <div className="summary-box">
+                        <span>COURT RESULT</span>
+                        <strong>{formatLabel(summaryData.courtResult)}</strong>
+                      </div>
+                      <div className="summary-box">
+                        <span>CASE ORIGIN</span>
+                        <strong>
+                          {toDisplayValue(summaryData.caseOrigin)}
+                          {summaryData.sourceIntakeCaseId
+                            ? ` • Intake #${summaryData.sourceIntakeCaseId}`
+                            : ""}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeTopTab === "documents" && (
+                  <div className="intake-details-panel tab-panel">
+                    <div className="intake-details-panel-header">
+                      <h3>Latest Documents</h3>
+                    </div>
+
+                    {latestDocuments.length === 0 ? (
+                      <div className="intake-details-empty">No documents found.</div>
+                    ) : (
+                      <div className="intake-details-table-wrap">
+                        <table className="intake-details-table">
+                          <thead>
+                            <tr>
+                              <th>Document Type</th>
+                              <th>File Name</th>
+                              <th>Status</th>
+                              <th>Uploaded At</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {latestDocuments.map((doc) => (
+                              <tr key={doc.id}>
+                                <td>{toDisplayValue(doc.document_type_label || doc.document_type)}</td>
+                                <td>{toDisplayValue(doc.uploaded_file_name)}</td>
+                                <td>{toDisplayValue(doc.document_status_label || doc.document_status)}</td>
+                                <td>{formatDateOnly(doc.created_at)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    <div className="intake-details-panel-header" style={{ marginTop: 16 }}>
+                      <h3>Document History</h3>
+                    </div>
+
+                    {documentHistory.length === 0 ? (
+                      <div className="intake-details-empty">No document history found.</div>
+                    ) : (
+                      <div className="intake-details-table-wrap">
+                        <table className="intake-details-table">
+                          <thead>
+                            <tr>
+                              <th>Document Type</th>
+                              <th>Version</th>
+                              <th>Status</th>
+                              <th>Uploaded At</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {documentHistory.map((doc) => (
+                              <tr key={doc.id}>
+                                <td>{toDisplayValue(doc.document_type_label || doc.document_type)}</td>
+                                <td>{toDisplayValue(doc.version_no)}</td>
+                                <td>{toDisplayValue(doc.version_status || doc.document_status)}</td>
+                                <td>{formatDateOnly(doc.created_at)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {activeTopTab === "court-events" && (
+                  <div className="intake-details-panel tab-panel">
+                    <div className="intake-details-panel-header">
+                      <h3>Court Events</h3>
+                    </div>
+
+                    {courtEvents.length === 0 ? (
+                      <div className="intake-details-empty">No court events found.</div>
+                    ) : (
+                      <div className="intake-details-table-wrap">
+                        <table className="intake-details-table">
+                          <thead>
+                            <tr>
+                              <th>Event Type</th>
+                              <th>Event Date</th>
+                              <th>Remarks</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {courtEvents.map((event) => (
+                              <tr key={event.id}>
+                                <td>{toDisplayValue(event.event_type_label || event.event_type)}</td>
+                                <td>{formatDateOnly(event.event_date)}</td>
+                                <td>{toDisplayValue(event.remarks || event.notes)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-
-          <div className="footer">
-            <span>Case Management System • DOJ Prototype</span>
-          </div>
-        </>
-      )}
+        )}
+      </div>
     </UserLayout>
   );
 }

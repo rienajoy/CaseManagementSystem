@@ -765,7 +765,7 @@ export default function AdminUsers() {
                             {u.profile_pic ? (
                               <img
                                 className="user-avatar-img"
-                                src={`http://127.0.0.1:5000/${u.profile_pic}?t=${Date.now()}`}
+                                src={`http://127.0.0.1:5000/${row.profile_pic}`}
                                 alt={`${u.first_name} ${u.last_name}`}
                               />
                             ) : (

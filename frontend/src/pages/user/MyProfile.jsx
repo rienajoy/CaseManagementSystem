@@ -1,35 +1,51 @@
-//src/pages/user/MyProfile.jsx
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import {
   getMyProfile,
   updateMyProfile,
   uploadMyProfilePicture,
+  changeMyPassword,
 } from "../../services/profileService.js";
+
 import { getStoredUser, setStoredUser } from "../../utils/storage";
 import UserLayout from "../../components/UserLayout";
-
-import "../../styles/dashboard.css";
+import "../../styles/user/my-profile.css";
+import "../../styles/user/profile-password.css";
 
 export default function MyProfile() {
   const navigate = useNavigate();
+  const feedbackTimerRef = useRef(null);
 
   const [user, setUser] = useState(getStoredUser());
   const [profile, setProfile] = useState(null);
-  const [msg, setMsg] = useState("");
-  const [err, setErr] = useState("");
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState("");
+  const [showProfilePicModal, setShowProfilePicModal] = useState(false);
+  const [feedbackModal, setFeedbackModal] = useState(null);
 
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+
+const [passwordForm, setPasswordForm] = useState({
+  current_password: "",
+  new_password: "",
+  confirm_password: "",
+});
+
+const [showPassword, setShowPassword] = useState({
+  current: false,
+  next: false,
+  confirm: false,
+});
+
+const [passwordLoading, setPasswordLoading] = useState(false);
+  
   const [form, setForm] = useState({
     first_name: "",
     last_name: "",
     email: "",
     username: "",
   });
-
-  const [showProfilePicModal, setShowProfilePicModal] = useState(false);
 
   useEffect(() => {
     if (!user) {
@@ -39,6 +55,27 @@ export default function MyProfile() {
 
     loadProfile();
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (feedbackTimerRef.current) {
+        clearTimeout(feedbackTimerRef.current);
+      }
+    };
+  }, []);
+
+  function showFeedback(message, type = "success") {
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
+    }
+
+    setFeedbackModal({ message, type });
+
+    feedbackTimerRef.current = setTimeout(() => {
+      setFeedbackModal(null);
+      feedbackTimerRef.current = null;
+    }, 5000);
+  }
 
   async function loadProfile() {
     try {
@@ -55,31 +92,27 @@ export default function MyProfile() {
         username: res.data.username || "",
       });
     } catch (e) {
-      setErr("Failed to load profile");
+      showFeedback("Failed to load profile.", "error");
     }
   }
 
   async function saveProfile(e) {
     e.preventDefault();
-    setMsg("");
-    setErr("");
 
     try {
       await updateMyProfile(form);
-      setMsg("Profile updated successfully.");
       await loadProfile();
+      showFeedback("Profile updated successfully.", "success");
     } catch (e) {
-      setErr(e?.response?.data?.message || "Update failed");
+      showFeedback(e?.response?.data?.message || "Update failed.", "error");
     }
   }
 
   async function uploadProfilePic(e) {
     e.preventDefault();
-    setMsg("");
-    setErr("");
 
     if (!file) {
-      setErr("Please select an image first.");
+      showFeedback("Please select an image first.", "error");
       return;
     }
 
@@ -88,13 +121,13 @@ export default function MyProfile() {
 
     try {
       await uploadMyProfilePicture(formData);
-      setMsg("Profile picture uploaded successfully.");
       await loadProfile();
       setPreview("");
       setFile(null);
       closeProfilePicModal();
-    } catch (e2) {
-      setErr(e2?.response?.data?.message || "Upload failed");
+      showFeedback("Profile picture uploaded successfully.", "success");
+    } catch (e) {
+      showFeedback(e?.response?.data?.message || "Upload failed.", "error");
     }
   }
 
@@ -112,6 +145,88 @@ export default function MyProfile() {
     setFile(null);
   }
 
+  const passwordRules = {
+  hasUppercase: /[A-Z]/.test(passwordForm.new_password),
+  hasNumber: /\d/.test(passwordForm.new_password),
+  hasMinLength: passwordForm.new_password.length >= 8,
+};
+
+const passedCount = Object.values(passwordRules).filter(Boolean).length;
+
+const passwordsMatch =
+  passwordForm.confirm_password.length > 0 &&
+  passwordForm.new_password === passwordForm.confirm_password;
+
+function togglePassword(field) {
+  setShowPassword((prev) => ({
+    ...prev,
+    [field]: !prev[field],
+  }));
+}
+
+function handlePasswordChange(e) {
+  const { name, value } = e.target;
+  setPasswordForm((prev) => ({
+    ...prev,
+    [name]: value,
+  }));
+}
+
+function clearPasswordForm() {
+  setPasswordForm({
+    current_password: "",
+    new_password: "",
+    confirm_password: "",
+  });
+}
+
+function getStrengthLabel() {
+  if (!passwordForm.new_password) {
+    return "Create a strong password for better account security.";
+  }
+  if (passedCount === 1) {
+    return "Weak password. Must contain:";
+  }
+  if (passedCount === 2) {
+    return "Moderate password. Almost there:";
+  }
+  return "Strong password.";
+}
+
+async function handleChangePassword(e) {
+  e.preventDefault();
+
+  if (!passwordsMatch) {
+    showFeedback("New password and confirmation do not match.", "error");
+    return;
+  }
+
+  if (passedCount < 3) {
+    showFeedback("Please complete the password requirements first.", "error");
+    return;
+  }
+
+  setPasswordLoading(true);
+
+  try {
+    await changeMyPassword({
+      old_password: passwordForm.current_password,
+      new_password: passwordForm.new_password,
+    });
+
+    clearPasswordForm();
+    setShowPasswordModal(false);
+    showFeedback("Password updated successfully.", "success");
+  } catch (e) {
+    showFeedback(
+      e?.response?.data?.message || "Failed to update password.",
+      "error"
+    );
+  } finally {
+    setPasswordLoading(false);
+  }
+}
+
   if (!user) {
     return <div style={{ padding: 20 }}>Redirecting...</div>;
   }
@@ -121,47 +236,52 @@ export default function MyProfile() {
   }
 
   return (
-    <UserLayout user={user}>
+      <UserLayout
+        user={user}
+        sectionBadge="INTAKE CASES"
+        pageTitle="My Profile"
+        pageSubtitle=" Review and update your personal account information, profile
+              picture, and account details."
+      >
       <div className="welcome-block manage-users-top">
         <div className="manage-users-header">
-          <div className="manage-users-title">
-            <h1>My Profile</h1>
-            <p className="subtitle">
-              Review and update your personal account information, profile
-              picture, and account details.
-            </p>
-          </div>
+
         </div>
       </div>
-
-      {msg && <div className="alert alert-success">{msg}</div>}
-      {err && <div className="alert alert-error">{err}</div>}
 
       <div className="manage-users-grid profile-page-grid">
         <div className="panel profile-overview-panel">
           <div className="profile-overview-card">
-            <button
-              type="button"
-              className="profile-avatar-trigger"
-              onClick={openProfilePicModal}
-              title="Change profile picture"
-            >
-              <div className="profile-avatar-wrap">
-                {profile?.profile_pic ? (
-                  <img
-                    src={`http://127.0.0.1:5000/${profile.profile_pic}?t=${Date.now()}`}
-                    alt="Profile"
-                    className="profile-avatar-large"
-                  />
-                ) : (
-                  <div className="profile-avatar-fallback-large">
-                    {getInitials()}
-                  </div>
-                )}
-                <div className="profile-avatar-edit-badge">Change Photo</div>
-              </div>
-            </button>
+<div className="profile-left">
+  <button
+    type="button"
+    className="profile-avatar-trigger"
+    onClick={openProfilePicModal}
+  >
+    <div className="profile-avatar-wrap">
+      {profile?.profile_pic ? (
+        <img
+          src={`http://127.0.0.1:5000/${profile.profile_pic}`}
+          alt="Profile"
+          className="profile-avatar-large"
+        />
+      ) : (
+        <div className="profile-avatar-fallback-large">
+          {getInitials()}
+        </div>
+      )}
 
+      <div className="profile-avatar-edit-badge">
+        Change Photo
+      </div>
+    </div>
+  </button>
+
+  {/* ✅ IBUTANG DIRI */}
+  <div className="profile-avatar-role">
+    {profile.role || "User"}
+  </div>
+</div>
             <div className="profile-overview-info">
               <div className="profile-role-badge">Account Profile</div>
               <h2>
@@ -186,7 +306,7 @@ export default function MyProfile() {
           </div>
         </div>
 
-        <div className="panel create-user-panel">
+        <div className="panel create-user-panel profile-info-panel">
           <div className="panel-header">
             <div>
               <h3>Profile Information</h3>
@@ -232,9 +352,9 @@ export default function MyProfile() {
               </div>
 
               <div className="form-field">
-                <label>System Username</label>
+                <label>Username</label>
                 <input
-                  placeholder="Enter your system username"
+                  placeholder="Enter your username"
                   value={form.username}
                   onChange={(e) =>
                     setForm({ ...form, username: e.target.value })
@@ -243,16 +363,26 @@ export default function MyProfile() {
               </div>
             </div>
 
-            <div className="modal-form-footer">
-              <p className="manage-users-note">
-                Please ensure that all account information is accurate, current,
-                and consistent with official records.
-              </p>
+<div className="modal-form-footer">
+  <p className="manage-users-note">
+    Please ensure that all account information is accurate, current,
+    and consistent with official records.
+  </p>
 
-              <button type="submit" className="btn create-account-submit-btn">
-                Update Profile Information
-              </button>
-            </div>
+  <div className="profile-action-row">
+    <button
+      type="button"
+      className="profile-secondary-btn"
+      onClick={() => setShowPasswordModal(true)}
+    >
+      Change Password
+    </button>
+
+    <button type="submit" className="btn create-account-submit-btn">
+      Update Profile Information
+    </button>
+  </div>
+</div>
           </form>
         </div>
       </div>
@@ -293,8 +423,7 @@ export default function MyProfile() {
                   />
                 ) : profile?.profile_pic ? (
                   <img
-                    src={`http://127.0.0.1:5000/${profile.profile_pic}?t=${Date.now()}`}
-                    alt="Current profile"
+                    src={`http://127.0.0.1:5000/${user.profile_pic}`}
                     className="profile-upload-preview"
                   />
                 ) : (
@@ -310,15 +439,19 @@ export default function MyProfile() {
                   onChange={(e) => {
                     const selected = e.target.files?.[0];
                     setFile(selected || null);
-                    if (selected) setPreview(URL.createObjectURL(selected));
-                    else setPreview("");
+
+                    if (selected) {
+                      setPreview(URL.createObjectURL(selected));
+                    } else {
+                      setPreview("");
+                    }
                   }}
                 />
               </div>
 
               <div className="form-note-box">
-                Supported format: image files. Please upload a clear and professional
-                profile photo for proper account identification.
+                Supported format: image files. Please upload a clear and
+                professional profile photo for proper account identification.
               </div>
 
               <div className="modal-form-footer">
@@ -345,9 +478,238 @@ export default function MyProfile() {
         </div>
       )}
 
-      <div className="footer">
-        <span>Case Management System • DOJ Prototype</span>
+      {feedbackModal && (
+        <div className="feedback-modal-overlay">
+          <div className={`feedback-modal-card ${feedbackModal.type}`}>
+            <button
+              type="button"
+              className="feedback-modal-close"
+              onClick={() => setFeedbackModal(null)}
+              aria-label="Close notification"
+            >
+              ×
+            </button>
+
+            <div className="feedback-modal-icon-wrap">
+              <div className={`feedback-modal-icon ${feedbackModal.type}`}>
+                {feedbackModal.type === "success" ? "✓" : "!"}
+              </div>
+            </div>
+
+            <div className="feedback-modal-body">
+              <h3 className="feedback-modal-title">
+                {feedbackModal.type === "success" ? "Success" : "Error"}
+              </h3>
+              <p className="feedback-modal-message">
+                {feedbackModal.message}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showPasswordModal && (
+  <div
+    className="modal-overlay profile-password-modal-overlay"
+    onClick={() => setShowPasswordModal(false)}
+  >
+    <div
+      className="modal-card profile-password-modal-card"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        className="modal-close-btn"
+        onClick={() => setShowPasswordModal(false)}
+        aria-label="Close change password modal"
+      >
+        ×
+      </button>
+
+      <div className="profile-password-title-wrap">
+        <div className="profile-password-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path
+              d="M7 10V7a5 5 0 0 1 10 0v3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <rect
+              x="4"
+              y="10"
+              width="16"
+              height="10"
+              rx="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </div>
+
+        <div>
+          <h3>Change Password</h3>
+          <p className="panel-subtitle">
+            Update your password for enhanced account security.
+          </p>
+        </div>
       </div>
+
+      <form onSubmit={handleChangePassword} className="profile-password-form">
+        <div className="profile-password-field">
+          <label>
+            Current Password<span>*</span>
+          </label>
+          <div className="profile-password-input-wrap">
+            <input
+              type={showPassword.current ? "text" : "password"}
+              name="current_password"
+              value={passwordForm.current_password}
+              onChange={handlePasswordChange}
+              placeholder="Enter current password"
+              required
+            />
+            <button
+              type="button"
+              className="profile-password-toggle-btn"
+              onClick={() => togglePassword("current")}
+              aria-label="Toggle current password visibility"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path
+                  d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div className="profile-password-field">
+          <label>
+            New Password<span>*</span>
+          </label>
+          <div className="profile-password-input-wrap">
+            <input
+              type={showPassword.next ? "text" : "password"}
+              name="new_password"
+              value={passwordForm.new_password}
+              onChange={handlePasswordChange}
+              placeholder="Enter new password"
+              required
+            />
+            <button
+              type="button"
+              className="profile-password-toggle-btn"
+              onClick={() => togglePassword("next")}
+              aria-label="Toggle new password visibility"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path
+                  d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div className="profile-password-field">
+          <div className="profile-password-label-row">
+            <label>
+              Confirm New Password<span>*</span>
+            </label>
+            <button
+              type="button"
+              className="profile-password-clear-btn"
+              onClick={clearPasswordForm}
+            >
+              Clear
+            </button>
+          </div>
+
+          <div className="profile-password-input-wrap">
+            <input
+              type={showPassword.confirm ? "text" : "password"}
+              name="confirm_password"
+              value={passwordForm.confirm_password}
+              onChange={handlePasswordChange}
+              placeholder="Confirm new password"
+              required
+            />
+            <button
+              type="button"
+              className="profile-password-toggle-btn"
+              onClick={() => togglePassword("confirm")}
+              aria-label="Toggle confirm password visibility"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path
+                  d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+          </div>
+
+          {passwordForm.confirm_password && !passwordsMatch && (
+            <p className="profile-password-match-error">
+              New password and confirmation do not match.
+            </p>
+          )}
+        </div>
+
+        <div className="profile-password-strength-wrap">
+          <div className="profile-password-strength-bars">
+            <span className={`profile-strength-bar ${passedCount >= 1 ? "active weak" : ""}`}></span>
+            <span className={`profile-strength-bar ${passedCount >= 2 ? "active medium" : ""}`}></span>
+            <span className={`profile-strength-bar ${passedCount >= 3 ? "active strong" : ""}`}></span>
+          </div>
+
+          <p className="profile-password-strength-text">{getStrengthLabel()}</p>
+
+          <ul className="profile-password-rules">
+            <li className={passwordRules.hasUppercase ? "valid" : ""}>
+              At least 1 uppercase
+            </li>
+            <li className={passwordRules.hasNumber ? "valid" : ""}>
+              At least 1 number
+            </li>
+            <li className={passwordRules.hasMinLength ? "valid" : ""}>
+              At least 8 characters
+            </li>
+          </ul>
+        </div>
+
+        <div className="profile-password-actions">
+          <button
+            type="button"
+            className="profile-password-discard-btn"
+            onClick={() => {
+              clearPasswordForm();
+              setShowPasswordModal(false);
+            }}
+          >
+            Discard
+          </button>
+
+          <button
+            type="submit"
+            className="profile-password-submit-btn"
+            disabled={passwordLoading}
+          >
+            {passwordLoading ? "Applying..." : "Apply Changes"}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+)}
     </UserLayout>
   );
 }

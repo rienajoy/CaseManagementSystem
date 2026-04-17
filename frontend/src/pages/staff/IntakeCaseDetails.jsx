@@ -6,7 +6,15 @@ import { getStoredUser } from "../../utils/storage";
 import {
   getIntakeCaseById,
   uploadIntakeCaseDocument,
+  getIntakeCaseDocumentTrackingEvents,
+  createIntakeCaseDocumentTrackingEvent,
 } from "../../services/staffService";
+
+import DocumentTypeMismatchModal from "../../components/staff/DocumentTypeMismatchModal";
+import {
+  isDocumentTypeMismatch,
+  buildMismatchInfo,
+} from "../../utils/documentTypeMismatch";
 
 import {
   PencilLine,
@@ -16,14 +24,19 @@ import {
   MoreVertical,
 } from "lucide-react";
 
+import { Pencil } from "lucide-react";
+import EditCanonicalModal from "../../components/intake/EditCanonicalModal";
+import { updateCanonicalIntakeCase } from "../../services/intakeCaseService";
 
+import { convertIntakeCaseToOfficial } from "../../services/staffService";
+import { useNavigate } from "react-router-dom";
 
 import DocumentReviewModal from "../../components/staff/DocumentReviewModal";
 import "../../styles/staff/intake-case-details-page.css";
 import api from "../../api";
 import IntakeCaseDetailsReviewedModal from "../../components/staff/IntakeCaseDetailsReviewedModal";
 
-
+import ChecklistIcon from "../../assets/icons/checklist.png";
 export default function IntakeCaseDetails() {
   const { intakeCaseId } = useParams();
 
@@ -39,10 +52,23 @@ const [deletingDocument, setDeletingDocument] = useState(false);
 const [documentDetailsSearch, setDocumentDetailsSearch] = useState("");
 const [activeMatchIndex, setActiveMatchIndex] = useState(0);
 
+
 const detailMatchRefs = useRef([]);
 const [activeDetailMatchIndex, setActiveDetailMatchIndex] = useState(0);
 
+const [showCanonicalEditModal, setShowCanonicalEditModal] = useState(false);
+const [savingCanonicalEdit, setSavingCanonicalEdit] = useState(false);
+
 const detailMatchCounterRef = useRef(0);
+
+const [showConvertConfirmModal, setShowConvertConfirmModal] = useState(false);
+const [showConvertSuccessModal, setShowConvertSuccessModal] = useState(false);
+const [convertedOfficialCaseId, setConvertedOfficialCaseId] = useState(null);
+
+
+const navigate = useNavigate();
+const [convertingCase, setConvertingCase] = useState(false);
+
 
 const [trackerModal, setTrackerModal] = useState({
   isOpen: false,
@@ -92,10 +118,13 @@ const [savingCompliance, setSavingCompliance] = useState(false);
   const [latestDocuments, setLatestDocuments] = useState([]);
   const [documentHistory, setDocumentHistory] = useState([]);
   const [checklist, setChecklist] = useState([]);
+const [checklistFilter, setChecklistFilter] = useState("all");
+
   const [trackers, setTrackers] = useState([]);
   const [complianceItems, setComplianceItems] = useState([]);
 
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
 
@@ -127,6 +156,43 @@ const [openDocumentMenuId, setOpenDocumentMenuId] = useState(null);
   const [uploadDateReceived, setUploadDateReceived] = useState("");
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadLoading, setUploadLoading] = useState(false);
+
+  const [isAdditionalDragActive, setIsAdditionalDragActive] = useState(false);
+
+  const [trackingTrailModal, setTrackingTrailModal] = useState({
+  isOpen: false,
+  tracker: null,
+});
+
+const canConvert =
+  record?.intake_status === "ready_for_conversion" &&
+  !record?.converted_case_id;
+
+const isConverted =
+  record?.intake_status === "converted" || !!record?.converted_case_id;
+
+const [trackingTrailItems, setTrackingTrailItems] = useState([]);
+const [trackingTrailLoading, setTrackingTrailLoading] = useState(false);
+
+const [trackingEventForm, setTrackingEventForm] = useState({
+  related_document_id: "",
+  document_type: "",
+  action_type: "",
+  action_date: "",
+  from_location: "",
+  from_office: "",
+  from_holder_name: "",
+  to_location: "",
+  to_office: "",
+  to_holder_name: "",
+  purpose: "",
+  reason: "",
+  method: "",
+  reference_no: "",
+  notes: "",
+});
+
+const [savingTrackingEvent, setSavingTrackingEvent] = useState(false);
 
 const [reviewedDetailsModal, setReviewedDetailsModal] = useState({
   isOpen: false,
@@ -197,6 +263,61 @@ function highlightText(text, keyword, sectionKey = "default") {
   });
 }
 
+function openCanonicalEditModal() {
+  setShowCanonicalEditModal(true);
+}
+
+function closeCanonicalEditModal() {
+  if (savingCanonicalEdit) return;
+  setShowCanonicalEditModal(false);
+}
+
+async function handleSaveCanonicalEdit(payload) {
+  try {
+    setSavingCanonicalEdit(true);
+    setErr("");
+    setMsg("");
+
+    await updateCanonicalIntakeCase(intakeCaseId, payload);
+
+    setShowCanonicalEditModal(false);
+    setMsg("Intake details updated successfully.");
+
+    await loadDetails({ silent: true });
+  } catch (error) {
+    console.error("Failed to update canonical intake data:", error);
+    setErr(
+      error?.response?.data?.message ||
+        "Failed to update intake details."
+    );
+  } finally {
+    setSavingCanonicalEdit(false);
+  }
+}
+
+function handleAdditionalDragOver(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  setIsAdditionalDragActive(true);
+}
+
+function handleAdditionalDragLeave(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  setIsAdditionalDragActive(false);
+}
+
+function handleDropAdditionalFile(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  setIsAdditionalDragActive(false);
+
+  const file = e.dataTransfer?.files?.[0];
+  if (!file) return;
+
+  setUploadFile(file);
+}
+
 function countMatches(text, keyword) {
   if (!text || !keyword?.trim()) return 0;
 
@@ -206,38 +327,39 @@ function countMatches(text, keyword) {
 }
 
 
-  async function loadDetails() {
-    try {
+async function loadDetails({ silent = false } = {}) {
+  try {
+    if (silent) {
+      setRefreshing(true);
+    } else {
       setLoading(true);
-      setErr("");
-      setMsg("");
+    }
 
-      const res = await getIntakeCaseById(intakeCaseId);
-      const data = res?.data?.data || {};
+    setErr("");
+    setMsg("");
 
-      setRecord(data.intake_case || null);
-      setDocuments(Array.isArray(data.documents) ? data.documents : []);
-      setLatestDocuments(
-        Array.isArray(data.latest_documents) ? data.latest_documents : []
-      );
-      setDocumentHistory(
-        Array.isArray(data.document_history) ? data.document_history : []
-      );
-      setChecklist(Array.isArray(data.checklist) ? data.checklist : []);
-      setTrackers(
-        Array.isArray(data.document_trackers) ? data.document_trackers : []
-      );
-      setComplianceItems(
-        Array.isArray(data.compliance_items) ? data.compliance_items : []
-      );
-    } catch (e) {
-      setErr(
-        e?.response?.data?.message || "Failed to load intake case details."
-      );
-    } finally {
+    const res = await getIntakeCaseById(intakeCaseId);
+    const data = res?.data?.data || {};
+
+    setRecord(data.intake_case || null);
+    setDocuments(Array.isArray(data.documents) ? data.documents : []);
+    setLatestDocuments(Array.isArray(data.latest_documents) ? data.latest_documents : []);
+    setDocumentHistory(Array.isArray(data.document_history) ? data.document_history : []);
+    setChecklist(Array.isArray(data.checklist) ? data.checklist : []);
+    setTrackers(Array.isArray(data.document_trackers) ? data.document_trackers : []);
+    setComplianceItems(Array.isArray(data.compliance_items) ? data.compliance_items : []);
+  } catch (e) {
+    setErr(
+      e?.response?.data?.message || "Failed to load intake case details."
+    );
+  } finally {
+    if (silent) {
+      setRefreshing(false);
+    } else {
       setLoading(false);
     }
   }
+}
 
   async function loadProsecutors() {
     try {
@@ -284,6 +406,15 @@ function countMatches(text, keyword) {
     }
   }
 
+function openReviewedDetailsModal(documentId) {
+  if (!documentId) return;
+
+  setReviewedDetailsModal({
+    isOpen: true,
+    documentId,
+  });
+}
+
   function closeReviewedDetailsModal() {
   setReviewedDetailsModal({
     isOpen: false,
@@ -291,8 +422,9 @@ function countMatches(text, keyword) {
   });
 }
 
-function openReviewedDetailsModal(documentId) {
-  setReviewedDetailsModal({
+function openReviewModal(documentId) {
+  console.log("Opening details review modal:", documentId);
+  setReviewModal({
     isOpen: true,
     documentId,
   });
@@ -431,6 +563,17 @@ async function handleDownloadDocument(doc) {
   }
 }
 
+function formatDateOnlyDisplay(value) {
+  if (!value) return "—";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value).slice(0, 10);
+  }
+
+  return date.toISOString().slice(0, 10);
+}
+
 async function handleReExtractDocument(doc) {
   if (!doc?.id) return;
 
@@ -472,7 +615,7 @@ async function confirmDeleteDocument() {
     setShowDeleteSuccessModal(true);
     setDocumentToDelete(null);
 
-    await loadDetails();
+    await loadDetails({ silent: true });
   } catch (error) {
     console.error("Failed to delete document:", error);
     setErr(
@@ -482,7 +625,7 @@ async function confirmDeleteDocument() {
   } finally {
     setDeletingDocument(false);
   }
-}
+} 
 
 function closeDeleteConfirmModal() {
   if (deletingDocument) return;
@@ -495,22 +638,24 @@ function closeDeleteSuccessModal() {
 }
 
 async function handleReviewSaved(payload) {
-  setMsg("Reviewed data successfully saved.");
-  setShowUploadSuccessModal(false);
-
-  await loadDetails();
-  closeReviewModal();
-
   const savedDocumentId =
     payload?.document?.id ||
     reviewModal.documentId ||
     null;
 
-  if (savedDocumentId) {
-    openReviewedDetailsModal(savedDocumentId);
-  }
-}
+  setMsg("Reviewed data successfully saved.");
+  setShowUploadSuccessModal(false);
 
+  closeReviewModal();
+
+  if (savedDocumentId) {
+    setTimeout(() => {
+      openReviewedDetailsModal(savedDocumentId);
+    }, 0);
+  }
+
+  await loadDetails({ silent: true });
+}
 
   function normalizeText(value) {
     if (value === null || value === undefined) return "";
@@ -628,48 +773,61 @@ async function handleReviewSaved(payload) {
   return `${parts[0]} et. al`;
 };
 
-  const summaryData = {
-    documentType: record?.document_type || record?.case_type,
-    docketNumber: record?.docket_number,
-    caseNumber: record?.case_number,
-    dateFiled: record?.date_filed,
+const summaryData = {
+  documentType: record?.document_type || record?.case_type,
+  docketNumber: record?.docket_number,
+  caseNumber: record?.case_number,
+  dateFiled: record?.date_filed,
 
-    assignedProsecutor:
-      record?.assigned_prosecutor ||
-      record?.assigned_prosecutor_name ||
-      record?.assigned_prosecutor_label,
+  assignedProsecutor:
+    record?.assigned_prosecutor ||
+    record?.assigned_prosecutor_name ||
+    record?.assigned_prosecutor_label,
 
-    caseStatus: record?.case_status || record?.case_status_label,
-    prosecutionResult: record?.prosecution_result,
-    courtResult: record?.court_result,
+  caseStatus: record?.case_status || record?.case_status_label,
+  prosecutionResult: record?.prosecution_result,
+  courtResult: record?.court_result,
 
-    caseTitle: record?.case_title,
-    offenseOrViolation: record?.offense_or_violation,
+  caseTitle: record?.case_title,
+  offenseOrViolation: record?.offense_or_violation,
 
-    complainants: Array.isArray(record?.complainants)
-      ? record.complainants.join(", ")
-      : record?.complainants,
+  complainants: Array.isArray(record?.complainants)
+    ? record.complainants.join(", ")
+    : record?.complainants,
 
-    respondents: Array.isArray(record?.respondents)
-      ? record.respondents.join(", ")
-      : record?.respondents,
+  respondents: Array.isArray(record?.respondents)
+    ? record.respondents.join(", ")
+    : record?.respondents,
 
-    resolutionDate: record?.resolution_date,
-    filedInCourtDate: record?.filed_in_court_date,
-    courtBranch: record?.court_branch,
+  resolutionDate: record?.resolution_date,
+  filedInCourtDate: record?.filed_in_court_date,
+  courtBranch: record?.court_branch,
 
-    intakeStatus:
-      record?.intake_status_label ||
-      record?.intake_status ||
-      record?.case_status,
+  intakeStatus:
+    record?.intake_status_label ||
+    record?.intake_status ||
+    record?.case_status,
 
-    createdBy:
-      record?.created_by_name ||
-      record?.created_by ||
-      user?.full_name,
+  createdBy:
+    record?.created_by_name ||
+    record?.created_by ||
+    user?.full_name,
 
-    createdAt: record?.created_at,
-  };
+  createdAt: record?.created_at,
+
+  reviewFlags: Array.isArray(record?.review_flags)
+    ? record.review_flags
+    : [],
+
+  warnings: Array.isArray(record?.warnings)
+    ? record.warnings
+    : [],
+
+  summaryConflicts: Array.isArray(record?.summary_conflicts)
+    ? record.summary_conflicts
+    : [],
+};
+
 
 const documentTypeOptions = useMemo(() => {
   if (record?.case_type === "INQ") {
@@ -743,13 +901,18 @@ function closeUploadSuccessModal() {
 
 function handleMismatchAcknowledge() {
   setShowMismatchModal(false);
-  setShowProcessingModal(false);
+  setMismatchInfo(null);
   setProcessingComplete(false);
   setUploadProgress(0);
+  setShowUploadSuccessModal(false);
+  setShowProcessingModal(false);
+  setUploadFile(null);
+  setUploadDocumentType("");
+  setUploadDateReceived("");
   setShowUploadModal(true);
 }
 
-  async function handleUploadAdditionalDocument(e) {
+async function handleUploadAdditionalDocument(e) {
   e.preventDefault();
 
   if (!record?.id) {
@@ -779,27 +942,64 @@ function handleMismatchAcknowledge() {
     setProcessingComplete(false);
     setUploadProgress(20);
 
-    const currentFileName = uploadFile?.name || "—";
-    const currentFileSize = uploadFile?.size || 0;
     const selectedDocumentType = uploadDocumentType;
 
     const formData = new FormData();
     formData.append("document", uploadFile);
     formData.append("document_type", uploadDocumentType);
-    formData.append("upload_mode", "extract");
+    formData.append("upload_mode", "save_only");
 
     if (uploadDateReceived) {
       formData.append("date_received", uploadDateReceived);
     }
 
-    setUploadProgress(45);
-
     const res = await uploadIntakeCaseDocument(record.id, formData);
     const uploadedDoc = res?.data?.data?.document || null;
 
+    if (!uploadedDoc?.id) {
+      throw new Error("Upload succeeded but no document ID was returned.");
+    }
+
+    setUploadProgress(45);
+
+    const extractRes = await api.post(
+      `/staff/intake-case-documents/${uploadedDoc.id}/extract`
+    );
+
+    const extractData = extractRes?.data?.data || {};
+    const extractedDoc = extractData?.document || uploadedDoc;
+
+    const hasMismatch =
+      extractedDoc?.is_document_type_mismatch === true ||
+      extractedDoc?.is_mismatch === true ||
+      isDocumentTypeMismatch(extractedDoc, selectedDocumentType);
+
+    if (hasMismatch) {
+      setUploadProgress(100);
+      setShowProcessingModal(false);
+      setProcessingComplete(false);
+      setUploadedDocumentSummary(null);
+
+      if (uploadedDoc?.id) {
+        try {
+          await api.delete(`/staff/intake-case-documents/${uploadedDoc.id}`);
+        } catch (deleteError) {
+          console.error("Failed to delete mismatched document:", deleteError);
+        }
+      }
+
+      await loadDetails();
+
+      setMismatchInfo(
+        buildMismatchInfo(extractedDoc, selectedDocumentType, uploadFile)
+      );
+      setShowMismatchModal(true);
+      return;
+    }
+
     setUploadProgress(100);
     setProcessingComplete(true);
-    setUploadedDocumentSummary(uploadedDoc);
+    setUploadedDocumentSummary(extractedDoc);
 
     setUploadDocumentType("");
     setUploadDateReceived("");
@@ -808,33 +1008,63 @@ function handleMismatchAcknowledge() {
     await loadDetails();
 
     setShowProcessingModal(false);
-setShowUploadSuccessModal(true);
+    setShowUploadSuccessModal(true);
   } catch (e) {
     const responseMessage =
       e?.response?.data?.message ||
       e?.response?.data?.errors?.[0] ||
+      e?.message ||
       "Failed to upload intake document.";
 
     const errorPayload = e?.response?.data?.data || {};
-    const detectedDocumentType =
-      errorPayload?.detected_document_type ||
-      errorPayload?.document?.detected_document_type ||
-      "";
+    const uploadedDocId =
+      errorPayload?.document?.id ||
+      errorPayload?.id ||
+      null;
+
+    const isMismatch =
+      errorPayload?.is_document_type_mismatch === true ||
+      errorPayload?.is_mismatch === true ||
+      errorPayload?.document?.is_document_type_mismatch === true ||
+      errorPayload?.document?.is_mismatch === true ||
+      responseMessage.toLowerCase().includes("match") ||
+      responseMessage.toLowerCase().includes("mismatch") ||
+      responseMessage.toLowerCase().includes("does not match");
 
     setUploadProgress(100);
     setProcessingComplete(false);
 
-    if (
-      responseMessage.toLowerCase().includes("match") ||
-      responseMessage.toLowerCase().includes("mismatch")
-    ) {
-      setMismatchInfo({
-        file_name: errorPayload?.file_name || uploadFile?.name || currentFileName,
-        file_size: errorPayload?.file_size || uploadFile?.size || currentFileSize,
-        selected_document_type: selectedDocumentType,
-        detected_document_type: detectedDocumentType || "Unknown",
-        message: responseMessage,
-      });
+    if (isMismatch) {
+      setShowUploadSuccessModal(false);
+      setShowProcessingModal(false);
+
+      if (uploadedDocId) {
+        try {
+          await api.delete(`/staff/intake-case-documents/${uploadedDocId}`);
+        } catch (deleteError) {
+          console.error("Failed to delete mismatched document from catch path:", deleteError);
+        }
+      }
+
+      await loadDetails();
+
+      setMismatchInfo(
+        buildMismatchInfo(
+          {
+            ...errorPayload,
+            ...errorPayload?.document,
+            detected_document_type:
+              errorPayload?.detected_document_type ||
+              errorPayload?.document?.detected_document_type ||
+              errorPayload?.document?.extracted_data?.detected_document_type ||
+              errorPayload?.document?.extracted_data?.metadata?.document_type ||
+              "",
+          },
+          uploadDocumentType || "—",
+          uploadFile
+        )
+      );
+
       setShowMismatchModal(true);
     } else {
       setShowProcessingModal(false);
@@ -845,41 +1075,52 @@ setShowUploadSuccessModal(true);
   }
 }
 
-  function renderStatusBadge(value) {
-    const display = toDisplayValue(value, "—");
-    const text = normalizeText(value || "—");
-    let className = "neutral";
+function renderStatusBadge(value) {
+  const display = toDisplayValue(
+    typeof value === "string" ? formatEnumLabel(value) : value,
+    "—"
+  );
 
-    if (
-      text.includes("ready") ||
-      text.includes("complete") ||
-      text.includes("reviewed") ||
-      text.includes("active") ||
-      text.includes("received") ||
-      text.includes("uploaded")
-    ) {
-      className = "success";
-    } else if (
-      text.includes("review") ||
-      text.includes("pending") ||
-      text.includes("confirmation") ||
-      text.includes("processing") ||
-      text.includes("awaiting")
-    ) {
-      className = "warning";
-    } else if (
-      text.includes("dismissed") ||
-      text.includes("failed") ||
-      text.includes("missing") ||
-      text.includes("incomplete")
-    ) {
-      className = "danger";
-    }
+  const text = normalizeText(value || "—");
+  let className = "neutral";
 
-    return (
-      <span className={`intake-details-status ${className}`}>{display}</span>
-    );
+  if (
+    text.includes("complied") ||
+    text.includes("complete") ||
+    text.includes("completed") ||
+    text.includes("reviewed") ||
+    text.includes("active") ||
+    text.includes("received") ||
+    text.includes("uploaded") ||
+    text.includes("satisfied")
+  ) {
+    className = "success";
+  } else if (
+    text.includes("pending") ||
+    text.includes("expected") ||
+    text.includes("ongoing") ||
+    text.includes("review") ||
+    text.includes("confirmation") ||
+    text.includes("processing") ||
+    text.includes("awaiting")
+  ) {
+    className = "warning";
+  } else if (
+    text.includes("overdue") ||
+    text.includes("failed") ||
+    text.includes("missing") ||
+    text.includes("incomplete") ||
+    text.includes("dismissed")
+  ) {
+    className = "danger";
+  } else if (text.includes("not applicable")) {
+    className = "neutral";
   }
+
+  return (
+    <span className={`intake-details-status ${className}`}>{display}</span>
+  );
+}
 
   function renderListTable(
     title,
@@ -945,6 +1186,57 @@ function handleCloseDocumentDetails() {
   });
 }
 
+function formatCanonicalFieldLabel(field) {
+  if (!field) return "Field";
+
+  return String(field)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+async function handleConvertToOfficialCase() {
+const caseNumber = String(record?.case_number || "").trim();
+
+if (!caseNumber) {
+  setErr("Official conversion requires court case number first.");
+  return;
+}
+
+  try {
+    setConvertingCase(true);
+    setErr("");
+    setMsg("");
+
+    const res = await convertIntakeCaseToOfficial(intakeCaseId);
+
+    const newCaseId = res?.data?.data?.case?.id || null;
+
+    setConvertedOfficialCaseId(newCaseId);
+    setShowConvertSuccessModal(true);
+    setMsg("Intake case converted successfully.");
+
+    setTimeout(() => {
+      if (newCaseId) {
+        navigate(`/staff/cases/${newCaseId}`);
+        return;
+      }
+
+      navigate("/staff/cases");
+    }, 1400);
+  } catch (error) {
+    console.error("Failed to convert intake case:", error);
+    console.error("Convert error payload:", error?.response?.data);
+
+    setErr(
+      error?.response?.data?.errors?.[0] ||
+      error?.response?.data?.message ||
+      "Failed to convert intake case."
+    );
+  } finally {
+    setConvertingCase(false);
+  }
+}
+
 function toggleDocumentMenu(docId) {
   setOpenDocumentMenuId((prev) => (prev === docId ? null : docId));
 }
@@ -1005,6 +1297,15 @@ function safePrettyJson(value) {
 function getDocumentCleanText(doc) {
   if (!doc) return "";
 
+  const normalizeTextBlock = (value) => {
+    if (typeof value !== "string" || !value.trim()) return "";
+
+    return value
+      .replace(/\\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  };
+
   const directCandidates = [
     doc.clean_text,
     doc.cleaned_text,
@@ -1014,18 +1315,16 @@ function getDocumentCleanText(doc) {
   ];
 
   for (const candidate of directCandidates) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate
-  .replace(/\\n/g, "\n")
-  .replace(/\n{3,}/g, "\n\n")
-  .trim();
+    const normalized = normalizeTextBlock(candidate);
+    if (normalized) {
+      return normalized;
     }
   }
 
   const extracted = doc.extracted_data;
 
-  if (typeof extracted === "string" && extracted.trim()) {
-    return extracted.trim();
+  if (typeof extracted === "string") {
+    return normalizeTextBlock(extracted);
   }
 
   if (extracted && typeof extracted === "object") {
@@ -1044,16 +1343,14 @@ function getDocumentCleanText(doc) {
     ];
 
     for (const candidate of nestedCandidates) {
-      if (typeof candidate === "string" && candidate.trim()) {
-        return candidate.trim();
+      const normalized = normalizeTextBlock(candidate);
+      if (normalized) {
+        return normalized;
       }
     }
   }
 
-  return candidate
-  .replace(/\\n/g, "\n")
-  .replace(/\n{2,}/g, "\n\n")
-  .trim();
+  return "";
 }
 
 const fullDetailsDoc = documentDetailsModal.document;
@@ -1171,24 +1468,23 @@ function getChecklistRowMeta(row) {
     .toLowerCase();
 
   const isRequired =
-    row?.is_required ??
-    !(statusText.includes("optional") || statusText.includes("not applicable"));
+    row?.is_required !== undefined && row?.is_required !== null
+      ? row.is_required
+      : !(statusText.includes("optional") || statusText.includes("not applicable"));
 
-const isPresent =
-  row?.is_present ??
-  (
-    statusText.includes("uploaded") ||
-    statusText.includes("present") ||
-    statusText.includes("reviewed") ||
-    statusText.includes("satisfied") ||
-    Boolean(row?.matched_document_id)
-  );
+  const isPresent =
+    row?.is_present !== undefined && row?.is_present !== null
+      ? row.is_present
+      : statusText.includes("uploaded") ||
+        statusText.includes("present") ||
+        statusText.includes("reviewed") ||
+        statusText.includes("satisfied") ||
+        Boolean(row?.matched_document_id);
 
   const isReviewed =
-    row?.is_reviewed ?? (
-    statusText.includes("reviewed") ||
-    statusText.includes("satisfied")
-    );
+    row?.is_reviewed !== undefined && row?.is_reviewed !== null
+      ? row.is_reviewed
+      : statusText.includes("reviewed") || statusText.includes("satisfied");
 
   let derivedStatus = "Missing";
 
@@ -1205,12 +1501,39 @@ const isPresent =
   };
 }
 
+function getMatchedChecklistDocumentName(row) {
+  return (
+    row?.matched_document_name ||
+    getRelatedDocumentNameById(row?.matched_document_id)
+  );
+}
+
+function renderDerivedStatusBadge(label) {
+  return renderStatusBadge(label);
+}
+
+function formatLabel(value) {
+  if (!value) return "";
+  return value
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function getTrackerTimelineLabel(row) {
   if (row?.is_completed) return "Completed";
   if (row?.is_overdue) {
-    return row?.days_delayed
-      ? `${row.days_delayed} day(s) overdue`
-      : "Overdue";
+    return row?.days_delayed ? `${row.days_delayed} day(s) overdue` : "Overdue";
+  }
+  if (row?.days_remaining !== null && row?.days_remaining !== undefined) {
+    return `${row.days_remaining} day(s) remaining`;
+  }
+  return "—";
+}
+
+function getComplianceTimelineLabel(row) {
+  if (row?.is_complied) return "Complied";
+  if (row?.is_overdue) {
+    return row?.days_overdue ? `${row.days_overdue} day(s) overdue` : "Overdue";
   }
   if (row?.days_remaining !== null && row?.days_remaining !== undefined) {
     return `${row.days_remaining} day(s) remaining`;
@@ -1237,16 +1560,16 @@ function getRelatedDocumentNameById(documentId) {
   return match?.uploaded_file_name || match?.document_type_label || `Document #${documentId}`;
 }
 
-function renderDerivedStatusBadge(label) {
-  return renderStatusBadge(label);
-}
+
 
 function normalizeDateInput(value) {
   if (!value) return "";
+
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return String(value).slice(0, 10);
   }
+
   return date.toISOString().slice(0, 10);
 }
 
@@ -1258,7 +1581,7 @@ function openTrackerModal(item) {
   });
 
   setTrackerForm({
-    document_type: item?.document_type || "",
+    document_type: item?.document_type_label || item?.document_type || "",
     tracking_type: item?.track_type || item?.tracking_type || "",
     source_location: item?.source_location || "",
     office_department: item?.office_department || item?.office || "",
@@ -1274,6 +1597,7 @@ function openTrackerModal(item) {
 
 function closeTrackerModal() {
   if (savingTracker) return;
+
   setTrackerModal({
     isOpen: false,
     mode: "edit",
@@ -1294,10 +1618,12 @@ function openComplianceModal(item) {
     compliance_type: item?.type || item?.compliance_type || "",
     issued_date: normalizeDateInput(item?.issued_date),
     due_date: normalizeDateInput(item?.due_date),
-    days_to_comply: item?.days_to_comply ?? "",
+    days_to_comply:
+      item?.days_to_comply === null || item?.days_to_comply === undefined
+        ? ""
+        : String(item.days_to_comply),
     complied_date: normalizeDateInput(item?.complied_date),
-    compliance_status:
-      item?.compliance_status || item?.status || "",
+    compliance_status: item?.compliance_status || item?.status || "",
     responsible_party: item?.responsible_party || "",
     remarks: item?.remarks || "",
     related_document_id: item?.related_document_id || "",
@@ -1306,6 +1632,7 @@ function openComplianceModal(item) {
 
 function closeComplianceModal() {
   if (savingCompliance) return;
+
   setComplianceModal({
     isOpen: false,
     mode: "edit",
@@ -1363,8 +1690,8 @@ async function handleSaveCompliance() {
     const payload = {
       title: complianceForm.title || null,
       description: complianceForm.description || null,
-      due_date: complianceForm.due_date || null,
       issued_date: complianceForm.issued_date || null,
+      due_date: complianceForm.due_date || null,
       days_to_comply:
         complianceForm.days_to_comply === ""
           ? null
@@ -1398,7 +1725,219 @@ function openRelatedDocumentById(documentId) {
   if (!matched) return;
   handleOpenDocumentDetails(matched);
 }
+const trackerStatusOptions = [
+  { value: "", label: "Select status" },
+  { value: "pending", label: "Pending" },
+  { value: "expected", label: "Expected" },
+  { value: "received", label: "Received" },
+  { value: "completed", label: "Completed" },
+  { value: "not_applicable", label: "Not Applicable" },
+];
 
+const trackerTypeOptions = [
+  { value: "", label: "Select type" },
+  { value: "expected", label: "Expected" },
+  { value: "incoming", label: "Incoming" },
+  { value: "outgoing", label: "Outgoing" },
+  { value: "internal", label: "Internal" },
+];
+
+const complianceStatusOptions = [
+  { value: "", label: "Select status" },
+  { value: "pending", label: "Pending" },
+  { value: "ongoing", label: "Ongoing" },
+  { value: "complied", label: "Complied" },
+  { value: "overdue", label: "Overdue" },
+  { value: "not_applicable", label: "Not Applicable" },
+];
+
+function formatEnumLabel(value) {
+  if (!value) return "—";
+  return String(value)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function computeDueDateFromIssuedAndDays(issuedDate, daysToComply) {
+  if (!issuedDate || daysToComply === "" || daysToComply === null || daysToComply === undefined) {
+    return "";
+  }
+
+  const base = new Date(issuedDate);
+  const days = Number(daysToComply);
+
+  if (Number.isNaN(base.getTime()) || Number.isNaN(days)) {
+    return "";
+  }
+
+  base.setDate(base.getDate() + days);
+  return base.toISOString().slice(0, 10);
+}
+
+const checklistSummary = checklist.reduce(
+  (acc, row) => {
+    const meta = getChecklistRowMeta(row);
+
+    acc.total += 1;
+    if (meta.derivedStatus === "Missing") acc.missing += 1;
+    if (meta.derivedStatus === "Uploaded") acc.uploaded += 1;
+    if (meta.derivedStatus === "Satisfied") acc.satisfied += 1;
+
+
+    return acc;
+  },
+  {
+    total: 0,
+    missing: 0,
+    uploaded: 0,
+    satisfied: 0,
+    optional: 0,
+  }
+);
+
+useEffect(() => {
+  if (complianceForm.complied_date) {
+    setComplianceForm((prev) => {
+      if (prev.compliance_status === "complied") return prev;
+      return {
+        ...prev,
+        compliance_status: "complied",
+      };
+    });
+  }
+}, [complianceForm.complied_date]);
+
+useEffect(() => {
+  const computedDueDate = computeDueDateFromIssuedAndDays(
+    complianceForm.issued_date,
+    complianceForm.days_to_comply
+  );
+
+  if (!computedDueDate) return;
+
+  setComplianceForm((prev) => {
+    if (prev.complied_date) return prev;
+    if (prev.due_date === computedDueDate) return prev;
+
+    return {
+      ...prev,
+      due_date: computedDueDate,
+    };
+  });
+}, [complianceForm.issued_date, complianceForm.days_to_comply, complianceForm.complied_date]);
+
+const filteredChecklist = checklist.filter((row) => {
+  const status = getChecklistRowMeta(row).derivedStatus.toLowerCase();
+  if (checklistFilter === "all") return true;
+  return status === checklistFilter;
+});
+
+async function openTrackingTrailModal(tracker) {
+  setTrackingTrailModal({
+    isOpen: true,
+    tracker,
+  });
+
+  setTrackingEventForm({
+    related_document_id: tracker?.related_document_id || "",
+    document_type: tracker?.document_type || "",
+    action_type: "",
+    action_date: "",
+    from_location:
+      tracker?.current_location ||
+      tracker?.office ||
+      tracker?.office_department ||
+      "",
+    from_office: tracker?.office || tracker?.office_department || "",
+    from_holder_name:
+      tracker?.current_holder_name ||
+      tracker?.responsible_party ||
+      "",
+    to_location: "",
+    to_office: "",
+    to_holder_name: "",
+    purpose: "",
+    reason: "",
+    method: "",
+    reference_no: "",
+    notes: "",
+  });
+
+  try {
+    setTrackingTrailLoading(true);
+    setErr("");
+
+    const res = await getIntakeCaseDocumentTrackingEvents(intakeCaseId, {
+      related_document_id: tracker?.related_document_id || undefined,
+      document_type: tracker?.document_type || undefined,
+    });
+
+    setTrackingTrailItems(res?.data?.data?.items || []);
+  } catch (error) {
+    console.error("Failed to load tracking trail:", error);
+    setTrackingTrailItems([]);
+    setErr(
+      error?.response?.data?.message || "Failed to load tracking trail."
+    );
+  } finally {
+    setTrackingTrailLoading(false);
+  }
+}
+
+function closeTrackingTrailModal() {
+  if (savingTrackingEvent) return;
+
+  setTrackingTrailModal({
+    isOpen: false,
+    tracker: null,
+  });
+  setTrackingTrailItems([]);
+}
+
+async function handleSaveTrackingEvent() {
+  if (!trackingTrailModal.tracker) return;
+
+  try {
+    setSavingTrackingEvent(true);
+    setErr("");
+    setMsg("");
+
+    const payload = {
+      related_document_id: trackingEventForm.related_document_id || null,
+      document_type: trackingEventForm.document_type || null,
+      action_type: trackingEventForm.action_type || null,
+      action_date: trackingEventForm.action_date || null,
+
+      from_location: trackingEventForm.from_location || null,
+      from_office: trackingEventForm.from_office || null,
+      from_holder_name: trackingEventForm.from_holder_name || null,
+
+      to_location: trackingEventForm.to_location || null,
+      to_office: trackingEventForm.to_office || null,
+      to_holder_name: trackingEventForm.to_holder_name || null,
+
+      purpose: trackingEventForm.purpose || null,
+      reason: trackingEventForm.reason || null,
+      method: trackingEventForm.method || null,
+      reference_no: trackingEventForm.reference_no || null,
+      notes: trackingEventForm.notes || null,
+    };
+
+    await createIntakeCaseDocumentTrackingEvent(intakeCaseId, payload);
+
+    setMsg("Tracking event added successfully.");
+
+    await loadDetails();
+    await openTrackingTrailModal(trackingTrailModal.tracker);
+  } catch (error) {
+    console.error("Failed to save tracking event:", error);
+    setErr(
+      error?.response?.data?.message || "Failed to save tracking event."
+    );
+  } finally {
+    setSavingTrackingEvent(false);
+  }
+}
 
   return (
     <UserLayout
@@ -1422,6 +1961,7 @@ function openRelatedDocumentById(documentId) {
 <div className="intake-top-row">
   <div className="intake-hero-stack">
 
+
 <div className="intake-top-tabs-shell">
   <div className="intake-top-tabs">
     <button
@@ -1429,7 +1969,7 @@ function openRelatedDocumentById(documentId) {
       className={`intake-top-tab ${activeTopTab === "intake-details" ? "active" : ""}`}
       onClick={() => setActiveTopTab("intake-details")}
     >
-      <span className="intake-top-tab-icon">⌂</span>
+      
       <span>Intake Details</span>
     </button>
 
@@ -1438,7 +1978,7 @@ function openRelatedDocumentById(documentId) {
       className={`intake-top-tab ${activeTopTab === "checklist" ? "active" : ""}`}
       onClick={() => setActiveTopTab("checklist")}
     >
-      <span className="intake-top-tab-icon">✓</span>
+      
       <span>Checklist ({checklist.length})</span>
     </button>
 
@@ -1447,7 +1987,7 @@ function openRelatedDocumentById(documentId) {
       className={`intake-top-tab ${activeTopTab === "trackers" ? "active" : ""}`}
       onClick={() => setActiveTopTab("trackers")}
     >
-      <span className="intake-top-tab-icon">▤</span>
+
       <span>Document Trackers ({trackers.length})</span>
     </button>
 
@@ -1456,163 +1996,242 @@ function openRelatedDocumentById(documentId) {
       className={`intake-top-tab ${activeTopTab === "compliance" ? "active" : ""}`}
       onClick={() => setActiveTopTab("compliance")}
     >
-      <span className="intake-top-tab-icon">◫</span>
+      
       <span>Compliance Items ({complianceItems.length})</span>
     </button>
   </div>
 </div>
 
+{canConvert && (
+  <button
+    type="button"
+    className="intake-details-toolbar-btn primary"
+    onClick={() => setShowConvertConfirmModal(true)}
+    disabled={convertingCase}
+  >
+    {convertingCase ? "Converting..." : "Convert to Official Case"}
+  </button>
+)}
+
 {activeTopTab === "intake-details" && (
   <div className="intake-case-hero-card">
-    <div className="intake-case-hero-top">
-      <div className="intake-case-hero-main">
-        <div className="intake-case-docket-inline">
-          <span className="intake-case-docket-label">DOCKET NO.</span>
-          <div className="intake-case-docket-pill">
-            {toDisplayValue(summaryData.docketNumber, "—")}
-          </div>
-        </div>
 
-        <div className="intake-case-title-block">
-          <div className="intake-case-party">
-            {toDisplayValue(summaryData.complainants, "—")}
-          </div>
+    <button
+      type="button"
+      className="intake-case-edit-btn top-edge"
+      onClick={openCanonicalEditModal}
+      aria-label="Edit intake details"
+      title="Edit intake details"
+    >
+      <Pencil size={18} />
+    </button>
 
-          <div className="intake-case-vs">VS.</div>
+    <div className="intake-case-hero-topbar">
+      <div className="intake-case-dockets-inline">
+        <span className="intake-case-docket-pill">
+          <span className="intake-case-docket-pill-label">DOCKET NO.:</span>
+          {toDisplayValue(summaryData.docketNumber, "—")}
+        </span>
 
-          <div className="intake-case-party">
-            {toDisplayValue(summaryData.respondents, "—")}
-          </div>
-        </div>
+        <span className="intake-case-docket-pill">
+          <span className="intake-case-docket-pill-label">CASE NO.:</span>
+          {toDisplayValue(summaryData.caseNumber, "—")}
+        </span>
+      </div>
+    </div>
+
+    <div className="intake-case-top-grid">
+      <div className="case-title-card">
+        <strong>{summaryData.caseTitle}</strong>
       </div>
 
-      <div className="intake-case-hero-side">
-        <div className="intake-case-side-card intake-case-side-card-wide">
-          <span>OFFENSE / VIOLATION</span>
-          <strong>{toDisplayValue(summaryData.offenseOrViolation, "—")}</strong>
+      <div className="case-top-right-grid">
+        <div className="summary-box">
+          <span>OFFENSE/VIOLATION</span>
+          <strong>{summaryData.offenseOrViolation}</strong>
         </div>
-
-        <div className="intake-case-side-card intake-case-side-card-narrow">
-          <span>DATE FILED</span>
-          <strong>{toDisplayValue(summaryData.dateFiled, "—")}</strong>
-        </div>
-
-        <div className="intake-case-side-card intake-case-side-card-wide">
-          <span>ASSIGNED PROSECUTOR</span>
-          <strong>{toDisplayValue(summaryData.assignedProsecutor, "Not Assigned")}</strong>
-        </div>
-
-        <div className="intake-case-side-card intake-case-side-card-narrow">
+        <div className="summary-box">
           <span>INTAKE STATUS</span>
-          <strong>{toDisplayValue(summaryData.intakeStatus, "Active")}</strong>
+          <strong>{summaryData.intakeStatus}</strong>
+        </div>
+        <div className="summary-box">
+          <span>ASSIGNED PROSECUTOR</span>
+          <strong>{summaryData.assignedProsecutor}</strong>
+        </div>
+        <div className="summary-box">
+          <span>DATE FILED</span>
+          <strong>{toDisplayValue(formatDateOnlyDisplay(summaryData.dateFiled), "—")}</strong>
         </div>
       </div>
     </div>
 
-<div className="intake-case-extra-grid">
+    <div className="intake-case-lower-grid">
+      <div className="summary-box">
+        <span>RESOLUTION DATE</span>
+        <strong>{toDisplayValue(formatDateOnlyDisplay(summaryData.resolutionDate), "—")}</strong>
+      </div>
 
-  {/* ROW 1 */}
-  <div className="intake-case-extra-card">
-    <span>RESOLUTION DATE</span>
-    <strong>{toDisplayValue(summaryData.resolutionDate, "—")}</strong>
-  </div>
+      <div className="summary-box">
+        <span>PROSECUTION RESULT</span>
+        <strong>{toDisplayValue(formatEnumLabel(summaryData.prosecutionResult), "—")}</strong>
+      </div>
 
-  <div className="intake-case-extra-card">
-    <span>PROSECUTION RESULT</span>
-    <strong>{toDisplayValue(summaryData.prosecutionResult, "—")}</strong>
-  </div>
+      <div className="summary-box">
+        <span>INFORMATION DATE FILED</span>
+        <strong>{toDisplayValue(formatDateOnlyDisplay(summaryData.filedInCourtDate), "—")}</strong>
+      </div>
+    </div>
 
-  <div className="intake-case-extra-card intake-case-extra-card-wide">
-    <span>COMPLAINANTS</span>
-    <strong>{toDisplayValue(summaryData.complainants, "—")}</strong>
-  </div>
-
-  {/* ROW 2 */}
-  <div className="intake-case-extra-card">
-    <span>INFORMATION DATE FILED</span>
-    <strong>{toDisplayValue(summaryData.filedInCourtDate, "—")}</strong>
-  </div>
-
-  <div className="intake-case-extra-card">
-    <span>CASE NUMBER</span>
-    <strong>{toDisplayValue(summaryData.caseNumber, "—")}</strong>
-  </div>
-
-  <div className="intake-case-extra-card intake-case-extra-card-wide">
-    <span>RESPONDENTS</span>
-    <strong>{toDisplayValue(summaryData.respondents, "—")}</strong>
-  </div>
-
-</div>
+    <div className="intake-case-last-row">
+      <div className="summary-box">
+        <span>RESPONDENTS</span>
+        <strong>{toDisplayValue(summaryData.respondents, "—")}</strong>
+      </div>
+      <div className="summary-box">
+        <span>COMPLAINANTS</span>
+        <strong>{toDisplayValue(summaryData.complainants, "—")}</strong>
+      </div>
+    </div>
   </div>
 )}
 
-{activeTopTab === "checklist" &&
-  renderListTable(
-    "Required Documents Checklist",
-    checklist,
-    [
-      {
-        key: "document_type",
-        label: "Document Type",
-        render: (row) =>
-          toDisplayValue(
-            row.document_type_label ||
-              row.document_type ||
-              row.name ||
-              row.item_name,
-            "—"
-          ),
-      },
-      {
-        key: "required",
-        label: "Required",
-        render: (row) =>
-          toDisplayValue(getChecklistRowMeta(row).isRequired ? "Yes" : "No", "—"),
-      },
-      {
-        key: "present",
-        label: "Present",
-        render: (row) =>
-          toDisplayValue(getChecklistRowMeta(row).isPresent ? "Yes" : "No", "—"),
-      },
-      {
-        key: "reviewed",
-        label: "Reviewed",
-        render: (row) =>
-          toDisplayValue(getChecklistRowMeta(row).isReviewed ? "Yes" : "No", "—"),
-      },
-      {
-        key: "status",
-        label: "Status",
-        render: (row) =>
-          renderDerivedStatusBadge(getChecklistRowMeta(row).derivedStatus),
-      },
-      {
-        key: "matched_document",
-        label: "Matched Document",
-        render: (row) =>
-          toDisplayValue(
-            row.matched_document_name ||
-              getRelatedDocumentNameById(row.matched_document_id),
-            "—"
-          ),
-      },
-      {
-        key: "label",
-        label: "Remarks",
-        render: (row) =>
-          toDisplayValue(
-            row.label ||
-              row.description ||
+{activeTopTab === "checklist" && (
+  <>
+    <div className="intake-checklist-summary-row">
+      <button
+        type="button"
+        className={`intake-checklist-summary-chip neutral ${
+          checklistFilter === "all" ? "active" : ""
+        }`}
+        onClick={() => setChecklistFilter("all")}
+      >
+        <span>Total</span>
+        <strong>{checklistSummary.total}</strong>
+      </button>
+
+      <button
+        type="button"
+        className={`intake-checklist-summary-chip danger ${
+          checklistFilter === "missing" ? "active" : ""
+        }`}
+        onClick={() => setChecklistFilter("missing")}
+      >
+        <span>Missing</span>
+        <strong>{checklistSummary.missing}</strong>
+      </button>
+
+      <button
+        type="button"
+        className={`intake-checklist-summary-chip warning ${
+          checklistFilter === "uploaded" ? "active" : ""
+        }`}
+        onClick={() => setChecklistFilter("uploaded")}
+      >
+        <span>Uploaded</span>
+        <strong>{checklistSummary.uploaded}</strong>
+      </button>
+
+      <button
+        type="button"
+        className={`intake-checklist-summary-chip success ${
+          checklistFilter === "satisfied" ? "active" : ""
+        }`}
+        onClick={() => setChecklistFilter("satisfied")}
+      >
+        <span>Satisfied</span>
+        <strong>{checklistSummary.satisfied}</strong>
+      </button>
+
+      <button
+        type="button"
+        className={`intake-checklist-summary-chip neutral ${
+          checklistFilter === "optional" ? "active" : ""
+        }`}
+        onClick={() => setChecklistFilter("optional")}
+      >
+        <span>Optional</span>
+        <strong>{checklistSummary.optional}</strong>
+      </button>
+    </div>
+
+    {renderListTable(
+      "Required Documents Checklist",
+      filteredChecklist,
+      [
+        {
+          key: "document_type",
+          label: "Document Type",
+          render: (row) =>
+            toDisplayValue(
+              row.document_type_label ||
+                row.document_type ||
+                row.name ||
+                row.item_name,
+              "—"
+            ),
+        },
+        {
+          key: "required",
+          label: "Required",
+          render: (row) =>
+            getChecklistRowMeta(row).isRequired ? "Yes" : "No",
+        },
+        {
+          key: "present",
+          label: "Present",
+          render: (row) =>
+            getChecklistRowMeta(row).isPresent ? "Yes" : "No",
+        },
+        {
+          key: "reviewed",
+          label: "Reviewed",
+          render: (row) =>
+            getChecklistRowMeta(row).isReviewed ? "Yes" : "No",
+        },
+        {
+          key: "status",
+          label: "Status",
+          render: (row) =>
+            renderDerivedStatusBadge(getChecklistRowMeta(row).derivedStatus),
+        },
+        {
+          key: "matched_document",
+          label: "Matched Document",
+          render: (row) => {
+            const label = getMatchedChecklistDocumentName(row);
+
+            if (!row?.matched_document_id || !label || label === "—") {
+              return toDisplayValue(label, "—");
+            }
+
+            return (
+              <button
+                type="button"
+                className="intake-inline-link-btn"
+                onClick={() => openRelatedDocumentById(row.matched_document_id)}
+              >
+                {label}
+              </button>
+            );
+          },
+        },
+        {
+          key: "remarks",
+          label: "Remarks",
+          render: (row) =>
+            toDisplayValue(
               row.remarks ||
-              row.note,
-            "—"
-          ),
-      },
-    ],
-    "No checklist items found."
-  )}
+                row.label ||
+                row.description ||
+                row.note,
+              "—"
+            ),
+        },
+      ],
+      "No checklist items found for this filter."
+    )}
+  </>
+)}
 
 
 {activeTopTab === "trackers" &&
@@ -1682,6 +2301,28 @@ function openRelatedDocumentById(documentId) {
           ),
       },
       {
+  key: "current_location",
+  label: "Current Location",
+  render: (row) =>
+    toDisplayValue(
+      row.current_location ||
+        row.office ||
+        row.office_department ||
+        row.source_location,
+      "—"
+    ),
+},
+{
+  key: "current_holder_name",
+  label: "Last Holder",
+  render: (row) =>
+    toDisplayValue(
+      row.current_holder_name ||
+        row.responsible_party,
+      "—"
+    ),
+},
+      {
         key: "requested_date",
         label: "Requested",
         render: (row) =>
@@ -1712,6 +2353,42 @@ function openRelatedDocumentById(documentId) {
             "—"
           ),
       },
+
+      {
+  key: "last_action",
+  label: "Last Action",
+  render: (row) =>
+    renderStatusBadge(
+      row.last_action_label ||
+        row.last_action ||
+        row.status_label ||
+        row.status
+    ),
+},
+{
+  key: "last_action_at",
+  label: "Last Action Date",
+  render: (row) =>
+    toDisplayValue(
+      formatDateOnly(
+        row.last_action_at ||
+          row.received_date ||
+          row.updated_at ||
+          row.created_at
+      ),
+      "—"
+    ),
+},
+{
+  key: "purpose",
+  label: "Purpose",
+  render: (row) =>
+    toDisplayValue(
+      row.purpose ||
+        row.remarks,
+      "—"
+    ),
+},
 
       {
   key: "related_document",
@@ -1752,6 +2429,35 @@ function openRelatedDocumentById(documentId) {
             "—"
           ),
       },
+
+      {
+  key: "actions",
+  label: "Actions",
+  render: (row) => (
+    <button
+      type="button"
+      className="intake-inline-action-btn"
+      onClick={() => openTrackerModal(row)}
+    >
+      Edit
+    </button>
+  ),
+},
+
+{
+  key: "trail",
+  label: "Trail",
+  render: (row) => (
+    <button
+      type="button"
+      className="intake-inline-action-btn"
+      onClick={() => openTrackingTrailModal(row)}
+    >
+      View Trail
+    </button>
+  ),
+},
+
     ],
     "No document trackers found."
   )}
@@ -1856,6 +2562,20 @@ function openRelatedDocumentById(documentId) {
             "—"
           ),
       },
+
+      {
+  key: "actions",
+  label: "Actions",
+  render: (row) => (
+    <button
+      type="button"
+      className="intake-inline-action-btn"
+      onClick={() => openComplianceModal(row)}
+    >
+      Edit
+    </button>
+  ),
+},
     ],
     "No compliance items found."
   )}
@@ -2012,9 +2732,6 @@ function openRelatedDocumentById(documentId) {
     </div>
   </div>
 
-  <div className="intake-case-meta-grid">
-    ...
-  </div>
 </div>
         )}
 
@@ -2074,13 +2791,21 @@ function openRelatedDocumentById(documentId) {
 
   {!uploadFile ? (
     <div className="intake-upload-dropzone-card">
-      <label className="intake-upload-dropzone">
-        <input
-          type="file"
-          accept=".pdf,.jpg,.jpeg,.png"
-          onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
-          hidden
-        />
+      <label
+  className={`intake-upload-dropzone ${
+    isAdditionalDragActive ? "is-drag-active" : ""
+  }`}
+  onDragOver={handleAdditionalDragOver}
+  onDragEnter={handleAdditionalDragOver}
+  onDragLeave={handleAdditionalDragLeave}
+  onDrop={handleDropAdditionalFile}
+>
+  <input
+    type="file"
+    accept=".pdf,.jpg,.jpeg,.png"
+    onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+    hidden
+  />
 
         <div className="intake-upload-dropzone-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none">
@@ -2155,50 +2880,33 @@ function openRelatedDocumentById(documentId) {
     </div>
   </div>
 )}
-{showProcessingModal && (
+
+{showProcessingModal && !showMismatchModal && (
   <div className="intake-modal-backdrop">
     <div
-      className={`intake-modal intake-processing-modal ${
-        showMismatchModal && mismatchInfo ? "is-failed" : ""
-      }`}
+      className="intake-modal intake-processing-modal"
       onClick={(e) => e.stopPropagation()}
     >
       <div className="intake-processing-hero">
         <div
           className={`intake-processing-orb ${
-            showMismatchModal && mismatchInfo
-              ? "is-failed"
-              : processingComplete
-              ? "is-complete"
-              : ""
+            processingComplete ? "is-complete" : ""
           }`}
         />
 
         <div className="intake-processing-copy">
-          <span
-            className={`intake-processing-badge ${
-              showMismatchModal && mismatchInfo ? "is-failed" : ""
-            }`}
-          >
-            {showMismatchModal && mismatchInfo
-              ? "Process Failed"
-              : processingComplete
-              ? "Completed"
-              : "Processing"}
+          <span className="intake-processing-badge">
+            {processingComplete ? "Completed" : "Processing"}
           </span>
 
           <h3>
-            {showMismatchModal && mismatchInfo
-              ? "Document Mismatch Detected"
-              : processingComplete
+            {processingComplete
               ? "Extraction Complete"
               : "Processing Document Extraction"}
           </h3>
 
           <p className="intake-upload-subtitle">
-            {showMismatchModal && mismatchInfo
-              ? "The uploaded file does not match the selected document type."
-              : processingComplete
+            {processingComplete
               ? "Please review the extracted result before finalizing this uploaded document."
               : "Please wait while the system validates and extracts the additional document data."}
           </p>
@@ -2208,9 +2916,7 @@ function openRelatedDocumentById(documentId) {
       <div className="intake-modal-body intake-processing-body">
         <div className="intake-processing-progress-top">
           <span className="intake-processing-step">
-            {showMismatchModal && mismatchInfo
-              ? "Process failed"
-              : processingComplete
+            {processingComplete
               ? "Completed successfully"
               : uploadProgress < 35
               ? "Uploading document..."
@@ -2222,14 +2928,12 @@ function openRelatedDocumentById(documentId) {
           </span>
 
           <strong className="intake-processing-percent">
-            {showMismatchModal && mismatchInfo ? "Failed" : `${uploadProgress}%`}
+            {`${uploadProgress}%`}
           </strong>
         </div>
 
         <div
-          className={`intake-processing-bar-shell modern ${
-            showMismatchModal && mismatchInfo ? "is-failed" : ""
-          }`}
+          className="intake-processing-bar-shell modern"
           role="progressbar"
           aria-valuenow={uploadProgress}
           aria-valuemin="0"
@@ -2238,76 +2942,36 @@ function openRelatedDocumentById(documentId) {
         >
           <div
             className={`intake-processing-bar-fill modern ${
-              showMismatchModal && mismatchInfo
-                ? "is-failed"
-                : processingComplete
-                ? "is-complete"
-                : ""
+              processingComplete ? "is-complete" : ""
             }`}
-            style={{
-              width:
-                showMismatchModal && mismatchInfo ? "100%" : `${uploadProgress}%`,
-            }}
+            style={{ width: `${uploadProgress}%` }}
           >
             <span className="intake-processing-bar-glow" />
           </div>
         </div>
 
-        {showMismatchModal && mismatchInfo ? (
-          <div className="intake-processing-review-note intake-processing-failed-note">
-            <span className="intake-processing-review-label">
-              Mismatch Details
-            </span>
+        <div className="intake-processing-review-note">
+          <span className="intake-processing-review-label">
+            {processingComplete ? "Next Step" : "Processing Status"}
+          </span>
 
-            <div className="intake-upload-success-grid intake-mismatch-grid">
-              <div className="intake-upload-success-item">
-                <span>File Name</span>
-                <strong>{mismatchInfo.file_name || "—"}</strong>
-              </div>
-
-              <div className="intake-upload-success-item">
-                <span>File Size</span>
-                <strong>{mismatchInfo.file_size || "—"}</strong>
-              </div>
-
-              <div className="intake-upload-success-item">
-                <span>Selected Document Type</span>
-                <strong>{mismatchInfo.selected_document_type || "—"}</strong>
-              </div>
-
-              <div className="intake-upload-success-item">
-                <span>Extracted Document Type</span>
-                <strong>{mismatchInfo.detected_document_type || "Unknown"}</strong>
-              </div>
-            </div>
-
-            <p className="intake-processing-failed-message">
-              {mismatchInfo.message ||
-                "Process failed. Please check the file and try again."}
-            </p>
-          </div>
-        ) : (
-          <div className="intake-processing-review-note">
-            <span className="intake-processing-review-label">
-              {processingComplete ? "Next Step" : "Processing Status"}
-            </span>
-
-
-          </div>
-        )}
+          <p>
+            {processingComplete
+              ? "The document was extracted successfully. You may review it now or close this dialog."
+              : uploadProgress < 35
+              ? "Uploading the additional document. Please wait..."
+              : "The document is being processed. Please wait while extraction completes..."}
+          </p>
+        </div>
       </div>
 
       <div className="intake-modal-footer">
-        {showMismatchModal && mismatchInfo ? (
+        {!processingComplete ? (
           <button
             type="button"
-            className="intake-modal-btn primary"
-            onClick={handleMismatchAcknowledge}
+            className="intake-modal-btn secondary"
+            disabled
           >
-            OK
-          </button>
-        ) : !processingComplete ? (
-          <button type="button" className="intake-modal-btn secondary" disabled>
             Processing...
           </button>
         ) : (
@@ -2838,6 +3502,886 @@ function openRelatedDocumentById(documentId) {
   </div>
 )}
 
+{trackerModal.isOpen && (
+  <div className="intake-modal-backdrop" onClick={closeTrackerModal}>
+    <div
+      className="intake-modal intake-inline-edit-modal"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="intake-modal-header">
+        <div>
+          <h3>Edit Document Tracker</h3>
+          <p className="intake-upload-subtitle">
+            Update tracker details for this intake case.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="intake-modal-close"
+          onClick={closeTrackerModal}
+          disabled={savingTracker}
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="intake-modal-body">
+        <div className="intake-inline-edit-grid">
+          <label>
+            <span>Document Type</span>
+            <input type="text" value={trackerForm.document_type} disabled />
+          </label>
+
+<label>
+  <span>Tracking Type</span>
+  <select
+    value={trackerForm.tracking_type}
+    onChange={(e) =>
+      setTrackerForm((prev) => ({
+        ...prev,
+        tracking_type: e.target.value,
+      }))
+    }
+  >
+    {trackerTypeOptions.map((option) => (
+      <option key={option.value} value={option.value}>
+        {option.label}
+      </option>
+    ))}
+  </select>
+</label>
+
+
+          <label>
+            <span>Source Location</span>
+            <input
+              type="text"
+              value={trackerForm.source_location}
+              onChange={(e) =>
+                setTrackerForm((prev) => ({
+                  ...prev,
+                  source_location: e.target.value,
+                }))
+              }
+            />
+          </label>
+
+          <label>
+            <span>Office / Department</span>
+            <input
+              type="text"
+              value={trackerForm.office_department}
+              onChange={(e) =>
+                setTrackerForm((prev) => ({
+                  ...prev,
+                  office_department: e.target.value,
+                }))
+              }
+            />
+          </label>
+
+          <label>
+            <span>Responsible Party</span>
+            <input
+              type="text"
+              value={trackerForm.responsible_party}
+              onChange={(e) =>
+                setTrackerForm((prev) => ({
+                  ...prev,
+                  responsible_party: e.target.value,
+                }))
+              }
+            />
+          </label>
+
+<label>
+  <span>Status</span>
+  <select
+    value={trackerForm.status}
+    onChange={(e) =>
+      setTrackerForm((prev) => ({
+        ...prev,
+        status: e.target.value,
+      }))
+    }
+  >
+    {trackerStatusOptions.map((option) => (
+      <option key={option.value} value={option.value}>
+        {option.label}
+      </option>
+    ))}
+  </select>
+</label>
+
+          <label>
+            <span>Requested Date</span>
+            <input
+              type="date"
+              value={trackerForm.requested_date}
+              onChange={(e) =>
+                setTrackerForm((prev) => ({
+                  ...prev,
+                  requested_date: e.target.value,
+                }))
+              }
+            />
+          </label>
+
+          <label>
+            <span>Expected Date</span>
+            <input
+              type="date"
+              value={trackerForm.expected_date}
+              onChange={(e) =>
+                setTrackerForm((prev) => ({
+                  ...prev,
+                  expected_date: e.target.value,
+                }))
+              }
+            />
+          </label>
+
+          <label>
+            <span>Due Date</span>
+            <input
+              type="date"
+              value={trackerForm.due_date}
+              onChange={(e) =>
+                setTrackerForm((prev) => ({
+                  ...prev,
+                  due_date: e.target.value,
+                }))
+              }
+            />
+          </label>
+
+<label>
+  <span>Received Date</span>
+  <input
+    type="date"
+    value={trackerForm.received_date}
+    onChange={(e) => {
+      const value = e.target.value;
+
+      setTrackerForm((prev) => ({
+        ...prev,
+        received_date: value,
+        status: value ? "received" : prev.status,
+      }));
+    }}
+  />
+</label>
+
+          <label className="intake-inline-edit-full">
+            <span>Remarks</span>
+            <textarea
+              rows={4}
+              value={trackerForm.remarks}
+              onChange={(e) =>
+                setTrackerForm((prev) => ({
+                  ...prev,
+                  remarks: e.target.value,
+                }))
+              }
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="intake-modal-footer">
+        <button
+          type="button"
+          className="intake-modal-btn secondary"
+          onClick={closeTrackerModal}
+          disabled={savingTracker}
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          className="intake-modal-btn primary"
+          onClick={handleSaveTracker}
+          disabled={savingTracker}
+        >
+          {savingTracker ? "Saving..." : "Save"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{complianceModal.isOpen && (
+  <div className="intake-modal-backdrop" onClick={closeComplianceModal}>
+    <div
+      className="intake-modal intake-inline-edit-modal"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="intake-modal-header">
+        <div>
+          <h3>Edit Compliance Item</h3>
+          <p className="intake-upload-subtitle">
+            Update compliance monitoring details.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="intake-modal-close"
+          onClick={closeComplianceModal}
+          disabled={savingCompliance}
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="intake-modal-body">
+        <div className="intake-inline-edit-grid">
+          <label className="intake-inline-edit-full">
+            <span>Title</span>
+            <input
+              type="text"
+              value={complianceForm.title}
+              onChange={(e) =>
+                setComplianceForm((prev) => ({
+                  ...prev,
+                  title: e.target.value,
+                }))
+              }
+            />
+          </label>
+
+          <label className="intake-inline-edit-full">
+            <span>Description</span>
+            <textarea
+              rows={3}
+              value={complianceForm.description}
+              onChange={(e) =>
+                setComplianceForm((prev) => ({
+                  ...prev,
+                  description: e.target.value,
+                }))
+              }
+            />
+          </label>
+
+          <label>
+            <span>Type</span>
+            <input type="text" value={complianceForm.compliance_type} disabled />
+          </label>
+
+
+<label className="intake-inline-edit-full">
+  <span>Related Document</span>
+  <input
+    type="text"
+    value={getRelatedDocumentNameById(complianceForm.related_document_id)}
+    disabled
+  />
+</label>
+
+<label>
+  <span>Status</span>
+  <select
+    value={complianceForm.compliance_status}
+    onChange={(e) =>
+      setComplianceForm((prev) => ({
+        ...prev,
+        compliance_status: e.target.value,
+      }))
+    }
+  >
+    {complianceStatusOptions.map((option) => (
+      <option key={option.value} value={option.value}>
+        {option.label}
+      </option>
+    ))}
+  </select>
+</label>
+
+<label>
+  <span>Issued Date</span>
+  <input
+    type="date"
+    value={complianceForm.issued_date}
+    onChange={(e) =>
+      setComplianceForm((prev) => ({
+        ...prev,
+        issued_date: e.target.value,
+      }))
+    }
+  />
+</label>
+
+          <label>
+            <span>Due Date</span>
+            <input
+              type="date"
+              value={complianceForm.due_date}
+              onChange={(e) =>
+                setComplianceForm((prev) => ({
+                  ...prev,
+                  due_date: e.target.value,
+                }))
+              }
+            />
+          </label>
+
+<label>
+  <span>Days to Comply</span>
+  <input
+    type="number"
+    value={complianceForm.days_to_comply}
+    onChange={(e) =>
+      setComplianceForm((prev) => ({
+        ...prev,
+        days_to_comply: e.target.value,
+      }))
+    }
+  />
+</label>
+
+<label>
+  <span>Complied Date</span>
+  <input
+    type="date"
+    value={complianceForm.complied_date}
+    onChange={(e) => {
+      const value = e.target.value;
+
+      setComplianceForm((prev) => ({
+        ...prev,
+        complied_date: value,
+        compliance_status: value ? "complied" : prev.compliance_status,
+      }));
+    }}
+  />
+</label>
+
+          <label>
+            <span>Responsible Party</span>
+            <input
+              type="text"
+              value={complianceForm.responsible_party}
+              onChange={(e) =>
+                setComplianceForm((prev) => ({
+                  ...prev,
+                  responsible_party: e.target.value,
+                }))
+              }
+            />
+          </label>
+
+          <label className="intake-inline-edit-full">
+            <span>Remarks</span>
+            <textarea
+              rows={4}
+              value={complianceForm.remarks}
+              onChange={(e) =>
+                setComplianceForm((prev) => ({
+                  ...prev,
+                  remarks: e.target.value,
+                }))
+              }
+            />
+          </label>
+        </div>
+      </div>
+
+      <div className="intake-modal-footer">
+        <button
+          type="button"
+          className="intake-modal-btn secondary"
+          onClick={closeComplianceModal}
+          disabled={savingCompliance}
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          className="intake-modal-btn primary"
+          onClick={handleSaveCompliance}
+          disabled={savingCompliance}
+        >
+          {savingCompliance ? "Saving..." : "Save"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{trackingTrailModal.isOpen && (
+  <div className="intake-modal-backdrop" onClick={closeTrackingTrailModal}>
+    <div
+      className="intake-modal intake-trail-modal"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="intake-modal-header">
+        <div>
+          <h3>Document Tracking Trail</h3>
+          <p className="intake-upload-subtitle">
+            {toDisplayValue(
+              trackingTrailModal.tracker?.document_type_label ||
+                trackingTrailModal.tracker?.document_type,
+              "—"
+            )}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="intake-modal-close"
+          onClick={closeTrackingTrailModal}
+          disabled={savingTrackingEvent}
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="intake-modal-body intake-trail-modal-body">
+        <div className="intake-trail-summary-grid">
+          <div className="intake-details-card intake-trail-summary-card">
+            <h4>Current Summary</h4>
+            <div className="intake-details-list">
+              <div className="intake-details-item">
+                <span>Status</span>
+                <strong>
+                  {toDisplayValue(
+                    trackingTrailModal.tracker?.status_label ||
+                      trackingTrailModal.tracker?.status,
+                    "—"
+                  )}
+                </strong>
+              </div>
+              <div className="intake-details-item">
+                <span>Current Location</span>
+                <strong>
+                  {toDisplayValue(
+                    trackingTrailModal.tracker?.current_location,
+                    "—"
+                  )}
+                </strong>
+              </div>
+              <div className="intake-details-item">
+                <span>Last Holder</span>
+                <strong>
+                  {toDisplayValue(
+                    trackingTrailModal.tracker?.current_holder_name,
+                    "—"
+                  )}
+                </strong>
+              </div>
+              <div className="intake-details-item">
+                <span>Last Action</span>
+                <strong>
+                  {toDisplayValue(
+                    trackingTrailModal.tracker?.last_action_label ||
+                      trackingTrailModal.tracker?.last_action,
+                    "—"
+                  )}
+                </strong>
+              </div>
+              <div className="intake-details-item">
+                <span>Last Action Date</span>
+                <strong>
+                  {toDisplayValue(
+                    formatDateTime(trackingTrailModal.tracker?.last_action_at),
+                    "—"
+                  )}
+                </strong>
+              </div>
+            </div>
+          </div>
+
+          <div className="intake-details-card intake-trail-event-card">
+            <h4>Add Tracking Event</h4>
+            <div className="intake-inline-edit-grid">
+              <label>
+                <span>Action Type</span>
+                <select
+                  value={trackingEventForm.action_type}
+                  onChange={(e) =>
+                    setTrackingEventForm((prev) => ({
+                      ...prev,
+                      action_type: e.target.value,
+                    }))
+                  }
+                >
+                  <option value="">Select action</option>
+                  <option value="submitted">Submitted</option>
+                  <option value="received">Received</option>
+                  <option value="forwarded">Forwarded</option>
+                  <option value="endorsed">Endorsed</option>
+                  <option value="returned">Returned</option>
+                  <option value="released">Released</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Action Date</span>
+                <input
+                  type="datetime-local"
+                  value={trackingEventForm.action_date}
+                  onChange={(e) =>
+                    setTrackingEventForm((prev) => ({
+                      ...prev,
+                      action_date: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>From Location</span>
+                <input
+                  type="text"
+                  value={trackingEventForm.from_location}
+                  onChange={(e) =>
+                    setTrackingEventForm((prev) => ({
+                      ...prev,
+                      from_location: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>To Location</span>
+                <input
+                  type="text"
+                  value={trackingEventForm.to_location}
+                  onChange={(e) =>
+                    setTrackingEventForm((prev) => ({
+                      ...prev,
+                      to_location: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>From Holder</span>
+                <input
+                  type="text"
+                  value={trackingEventForm.from_holder_name}
+                  onChange={(e) =>
+                    setTrackingEventForm((prev) => ({
+                      ...prev,
+                      from_holder_name: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>To Holder</span>
+                <input
+                  type="text"
+                  value={trackingEventForm.to_holder_name}
+                  onChange={(e) =>
+                    setTrackingEventForm((prev) => ({
+                      ...prev,
+                      to_holder_name: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label className="intake-inline-edit-full">
+                <span>Purpose</span>
+                <input
+                  type="text"
+                  value={trackingEventForm.purpose}
+                  onChange={(e) =>
+                    setTrackingEventForm((prev) => ({
+                      ...prev,
+                      purpose: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label className="intake-inline-edit-full">
+                <span>Reason</span>
+                <textarea
+                  rows={2}
+                  value={trackingEventForm.reason}
+                  onChange={(e) =>
+                    setTrackingEventForm((prev) => ({
+                      ...prev,
+                      reason: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>Method</span>
+                <input
+                  type="text"
+                  value={trackingEventForm.method}
+                  onChange={(e) =>
+                    setTrackingEventForm((prev) => ({
+                      ...prev,
+                      method: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>Reference No.</span>
+                <input
+                  type="text"
+                  value={trackingEventForm.reference_no}
+                  onChange={(e) =>
+                    setTrackingEventForm((prev) => ({
+                      ...prev,
+                      reference_no: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label className="intake-inline-edit-full">
+                <span>Notes</span>
+                <textarea
+                  rows={3}
+                  value={trackingEventForm.notes}
+                  onChange={(e) =>
+                    setTrackingEventForm((prev) => ({
+                      ...prev,
+                      notes: e.target.value,
+                    }))
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="intake-trail-form-actions">
+              <button
+                type="button"
+                className="intake-modal-btn primary"
+                onClick={handleSaveTrackingEvent}
+                disabled={savingTrackingEvent}
+              >
+                {savingTrackingEvent ? "Saving..." : "Add Event"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+<div className="intake-details-panel tab-panel">
+  <div className="intake-details-panel-header">
+    <h3>Movement History</h3>
+  </div>
+
+  {trackingTrailLoading ? (
+    <div className="intake-details-empty">Loading trail...</div>
+  ) : trackingTrailItems.length === 0 ? (
+    <div className="intake-details-empty">No tracking history found.</div>
+  ) : (
+    <div className="intake-trail-timeline">
+      {trackingTrailItems.map((item, index) => (
+        <div className="intake-trail-timeline-item" key={item.id || index}>
+          <div className="intake-trail-timeline-line" />
+          <div className="intake-trail-timeline-dot" />
+
+          <div className="intake-trail-timeline-card">
+            <div className="intake-trail-timeline-top">
+              <div className="intake-trail-timeline-title-wrap">
+                <div className="intake-trail-timeline-title">
+                  {renderStatusBadge(item.action_type_label || item.action_type)}
+                </div>
+                <div className="intake-trail-timeline-date">
+                  {toDisplayValue(formatDateTime(item.action_date), "—")}
+                </div>
+              </div>
+
+              <div className="intake-trail-timeline-by">
+                By: {toDisplayValue(item.created_by_name, "—")}
+              </div>
+            </div>
+
+            <div className="intake-trail-timeline-grid">
+              <div className="intake-trail-timeline-meta">
+                <span>From</span>
+                <strong>
+                  {toDisplayValue(
+                    [item.from_location, item.from_holder_name]
+                      .filter(Boolean)
+                      .join(" • "),
+                    "—"
+                  )}
+                </strong>
+              </div>
+
+              <div className="intake-trail-timeline-meta">
+                <span>To</span>
+                <strong>
+                  {toDisplayValue(
+                    [item.to_location, item.to_holder_name]
+                      .filter(Boolean)
+                      .join(" • "),
+                    "—"
+                  )}
+                </strong>
+              </div>
+
+              <div className="intake-trail-timeline-meta">
+                <span>Purpose</span>
+                <strong>{toDisplayValue(item.purpose, "—")}</strong>
+              </div>
+
+              <div className="intake-trail-timeline-meta">
+                <span>Method</span>
+                <strong>{toDisplayValue(item.method, "—")}</strong>
+              </div>
+
+              <div className="intake-trail-timeline-meta intake-trail-timeline-meta-full">
+                <span>Reason</span>
+                <strong>{toDisplayValue(item.reason, "—")}</strong>
+              </div>
+
+              <div className="intake-trail-timeline-meta intake-trail-timeline-meta-full">
+                <span>Notes</span>
+                <strong>{toDisplayValue(item.notes, "—")}</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )}
+</div>
+
+
+      </div>
+
+      <div className="intake-modal-footer">
+        <button
+          type="button"
+          className="intake-modal-btn secondary"
+          onClick={closeTrackingTrailModal}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{showConvertConfirmModal && (
+  <div
+    className="intake-modal-backdrop"
+    onClick={() => {
+      if (convertingCase) return;
+      setShowConvertConfirmModal(false);
+    }}
+  >
+    <div
+      className="intake-modal intake-convert-modal"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="intake-modal-header">
+        <div>
+          <h3>Convert Intake Case to Official Case</h3>
+<p className="intake-upload-subtitle">
+  This intake case has been filed in court and is now eligible for
+  conversion to an official case record.
+</p>
+        </div>
+
+        <button
+          type="button"
+          className="intake-modal-close"
+          onClick={() => setShowConvertConfirmModal(false)}
+          disabled={convertingCase}
+        >
+          ×
+        </button>
+      </div>
+
+      <div className="intake-modal-body">
+        <div className="intake-convert-summary-card">
+
+          <div className="intake-convert-warning">
+            Once converted, it will be removed from Intake Cases and shown under Official Cases.
+Do you want to continue?
+          </div>
+        </div>
+      </div>
+
+      <div className="intake-modal-footer">
+        <button
+          type="button"
+          className="intake-modal-btn secondary"
+          onClick={() => setShowConvertConfirmModal(false)}
+          disabled={convertingCase}
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          className="intake-modal-btn primary"
+          onClick={async () => {
+            setShowConvertConfirmModal(false);
+            await handleConvertToOfficialCase();
+          }}
+          disabled={convertingCase}
+        >
+          {convertingCase ? "Converting..." : "Convert Case"}
+        </button>
+      </div>
+    </div>
+  </div>
+)}
+
+{showConvertSuccessModal && (
+  <div className="intake-modal-backdrop">
+    <div
+      className="intake-modal intake-upload-success-modal"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="intake-modal-header">
+        <div>
+          <h3>Official Case Created Successfully</h3>
+<p className="intake-upload-subtitle">
+  This intake case has been successfully converted to an official case.
+</p>
+        </div>
+      </div>
+
+      <div className="intake-modal-body">
+        <div className="intake-upload-success-card">
+         <div className="intake-upload-success-title">
+    Redirecting to the Official Case Details page...
+  </div>
+
+          {convertedOfficialCaseId && (
+            <div className="intake-upload-success-id">
+      OFFICIAL CASE ID: {convertedOfficialCaseId}
+    </div>
+          )}
+        </div>
+      </div>
+    </div>
+  </div>
+)}
+
+
+<EditCanonicalModal
+  open={showCanonicalEditModal}
+  onClose={closeCanonicalEditModal}
+  onSave={handleSaveCanonicalEdit}
+  saving={savingCanonicalEdit}
+  record={record}
+  prosecutors={prosecutorOptions}
+/>
+
         <DocumentReviewModal
           isOpen={reviewModal.isOpen}
           documentId={reviewModal.documentId}
@@ -2856,6 +4400,14 @@ function openRelatedDocumentById(documentId) {
     setMsg("Reviewed data successfully updated.");
     await loadDetails();
   }}
+/>
+
+<DocumentTypeMismatchModal
+  isOpen={showMismatchModal}
+  mismatchInfo={mismatchInfo}
+  onAcknowledge={handleMismatchAcknowledge}
+  onClose={handleMismatchAcknowledge}
+  formatFileSize={formatFileSize}
 />
       </div>
     </UserLayout>

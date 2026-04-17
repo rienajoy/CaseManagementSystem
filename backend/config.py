@@ -6,7 +6,7 @@ load_dotenv()
 
 class Config:
     DATABASE_URL = os.getenv("DATABASE_URL")
-    SECRET_KEY = os.getenv("SECRET_KEY", "fallback_secret_key")
+    SECRET_KEY = os.getenv("SECRET_KEY", "change_this_to_a_long_random_secret_key_32_chars_min")
     DEBUG = os.getenv("DEBUG", "False").lower() == "true"
     UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads/profile_pics")
     OCR_UPLOAD_FOLDER = os.getenv("OCR_UPLOAD_FOLDER", "uploads/ocr_documents")

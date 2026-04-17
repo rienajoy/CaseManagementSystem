@@ -9,6 +9,8 @@ from app.services.staff.intake_document_service import has_any_uploaded
 # Checklist / tracker / compliance helpers
 # -----------------------------
 def build_initial_checklist(db, intake_case, summary):
+    from model import IntakeCaseDocument
+    summary = summary or {} 
     uploaded_document_types = set(summary.get("uploaded_document_types", []))
     prosecution_result = summary.get("prosecution_result")
     case_number = summary.get("case_number")
@@ -20,23 +22,108 @@ def build_initial_checklist(db, intake_case, summary):
         .all()
     )
 
+    documents = (
+        db.query(IntakeCaseDocument)
+        .filter(IntakeCaseDocument.intake_case_id == intake_case.id)
+        .order_by(IntakeCaseDocument.created_at.asc())
+        .all()
+    )
+
     tracker_map = {tracker.document_type: tracker for tracker in trackers}
     checklist = []
 
-    def make_item(document_type, status):
-        label_map = {
-            "uploaded": "Uploaded",
-            "missing": "Missing",
-            "pending": "Pending",
-            "not_yet_required": "Not Yet Required",
-            "under_compliance": "Under Compliance",
-            "received_late": "Received Late",
-            "not_applicable": "Not Applicable",
-        }
+    def make_label(value):
+        return (value or "").replace("_", " ").title()
+
+    def find_matching_document(document_type):
+        exact_matches = [
+            doc for doc in documents
+            if getattr(doc, "document_type", None) == document_type
+        ]
+        if exact_matches:
+            return exact_matches[-1]
+
+        if document_type == "police_report_or_arrest_report":
+            grouped = [
+                doc for doc in documents
+                if getattr(doc, "document_type", None) in INQ_INITIATING_DOCUMENT_TYPES
+            ]
+            if grouped:
+                return grouped[-1]
+
+        if document_type == "inquest_resolution":
+            grouped = [
+                doc for doc in documents
+                if getattr(doc, "document_type", None) in {"inquest_resolution", "resolution"}
+            ]
+            if grouped:
+                return grouped[-1]
+
+        return None
+
+    def make_item(document_type, status, is_required=True):
+        matched_doc = find_matching_document(document_type)
+        is_present = matched_doc is not None
+        is_reviewed = bool(getattr(matched_doc, "is_reviewed", False)) if matched_doc else False
+
+        if not is_required:
+            status_value = "not_applicable"
+            status_label = "Optional"
+        elif is_reviewed:
+            status_value = "satisfied"
+            status_label = "Satisfied"
+        elif is_present:
+            if status == "received_late":
+                status_value = "uploaded"
+                status_label = "Uploaded"
+            else:
+                status_value = "uploaded"
+                status_label = "Uploaded"
+        else:
+            status_value = status
+            label_map = {
+                "uploaded": "Uploaded",
+                "missing": "Missing",
+                "pending": "Pending",
+                "not_yet_required": "Not Yet Required",
+                "under_compliance": "Under Compliance",
+                "received_late": "Received Late",
+                "not_applicable": "Not Applicable",
+                "satisfied": "Satisfied",
+            }
+            status_label = label_map.get(status_value, make_label(status_value))
+
+        remarks = None
+        if not is_required:
+            remarks = "Optional / not applicable for the current case state."
+        elif is_reviewed:
+            remarks = "Document uploaded and reviewed."
+        elif is_present:
+            remarks = "Document uploaded but still needs review."
+        elif status == "under_compliance":
+            remarks = "Waiting for compliance/submission."
+        elif status == "pending":
+            remarks = "Expected but not yet uploaded."
+        elif status == "missing":
+            remarks = "Required document not yet uploaded."
+        elif status == "not_yet_required":
+            remarks = "Document is not yet required at this stage."
+
         return {
             "document_type": document_type,
-            "status": status,
-            "label": label_map.get(status, status.replace("_", " ").title()),
+            "document_type_label": make_label(document_type),
+            "status": status_value,
+            "status_label": status_label,
+            "label": status_label,
+
+            "is_required": is_required,
+            "is_present": is_present,
+            "is_reviewed": is_reviewed,
+
+            "matched_document_id": getattr(matched_doc, "id", None) if matched_doc else None,
+            "matched_document_name": getattr(matched_doc, "uploaded_file_name", None) if matched_doc else None,
+
+            "remarks": remarks,
         }
 
     def get_uploaded_status(document_type):
@@ -72,7 +159,7 @@ def build_initial_checklist(db, intake_case, summary):
             checklist.append(make_item("resolution", "not_yet_required"))
 
         if prosecution_result == "no_probable_cause":
-            checklist.append(make_item("information", "not_applicable"))
+            checklist.append(make_item("information", "not_applicable", is_required=False))
         elif prosecution_result == "with_probable_cause" or case_status in {"for_filing", "approved_for_filing"}:
             if "information" in uploaded_document_types:
                 checklist.append(make_item("information", get_uploaded_status("information")))
@@ -96,8 +183,6 @@ def build_initial_checklist(db, intake_case, summary):
         else:
             checklist.append(make_item("police_report_or_arrest_report", "missing"))
 
-
-
         if "inquest_resolution" in uploaded_document_types:
             checklist.append(make_item("inquest_resolution", get_uploaded_status("inquest_resolution")))
         elif "resolution" in uploaded_document_types:
@@ -108,7 +193,7 @@ def build_initial_checklist(db, intake_case, summary):
             checklist.append(make_item("inquest_resolution", "not_yet_required"))
 
         if prosecution_result == "no_probable_cause":
-            checklist.append(make_item("information", "not_applicable"))
+            checklist.append(make_item("information", "not_applicable", is_required=False))
         elif prosecution_result == "with_probable_cause" or case_status in {"for_filing", "approved_for_filing", "filed_in_court"}:
             if "information" in uploaded_document_types:
                 checklist.append(make_item("information", get_uploaded_status("information")))
@@ -133,10 +218,11 @@ def build_initial_checklist(db, intake_case, summary):
 
     return checklist
 
+    
 def sync_missing_document_trackers(db, intake_case, current_user_id):
     from app.services.staff.summary_service import summarize_intake_case_from_documents
 
-    summary = summarize_intake_case_from_documents(db, intake_case.id)
+    summary = summarize_intake_case_from_documents(db, intake_case.id) or {}
     checklist = build_initial_checklist(db, intake_case, summary)
 
     existing_items = (

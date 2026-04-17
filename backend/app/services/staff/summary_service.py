@@ -38,6 +38,72 @@ OFFENSE_CATEGORY_RULES = [
     ("Fencing", ["fencing"]),
 ]
 
+def _is_blank(value):
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, list):
+        return len([x for x in value if str(x).strip()]) == 0
+    return False
+
+
+def build_canonical_update_candidates(current_summary, reviewed_data, document):
+    reviewed_data = reviewed_data or {}
+    current_summary = current_summary or {}
+
+    tracked_fields = [
+        "document_type",
+        "date_filed",
+        "docket_number",
+        "case_number",
+        "complainants",
+        "respondents",
+        "offense_or_violation",
+        "case_title",
+        "assigned_prosecutor",
+        "assigned_prosecutor_id",
+        "resolution_date",
+        "filed_in_court_date",
+        "court_branch",
+        "case_status",
+        "prosecution_result",
+        "court_result",
+    ]
+
+    candidates = []
+
+    for field in tracked_fields:
+        current_value = current_summary.get(field)
+        proposed_value = reviewed_data.get(field)
+
+        if field in {"complainants", "respondents", "review_flags"}:
+            current_value = normalize_to_list(current_value)
+            proposed_value = normalize_to_list(proposed_value)
+
+        # blank does not replace anything
+        if _is_blank(proposed_value):
+            continue
+
+        # if canonical is blank, auto-fill later; no need to ask user
+        if _is_blank(current_value):
+            continue
+
+        # no conflict if same
+        if current_value == proposed_value:
+            continue
+
+        candidates.append({
+            "field": field,
+            "current_value": current_value,
+            "proposed_value": proposed_value,
+            "document_id": document.id,
+            "document_type": document.document_type,
+            "source_level": "reviewed",
+        })
+
+    return candidates
+
 def get_latest_saved_reviewed_data_for_intake_case(db, intake_case_id, exclude_document_id=None):
     documents = (
         db.query(IntakeCaseDocument)
@@ -229,6 +295,8 @@ def summarize_intake_case_from_documents(db, intake_case_id):
         "review_flags": [],
         "warnings": [],
         "uploaded_document_types": [],
+        "summary_field_sources": {},
+        "summary_conflicts": [],
     }
 
     if not documents:
@@ -244,19 +312,147 @@ def summarize_intake_case_from_documents(db, intake_case_id):
     latest_subpoena_doc = get_latest_preferred_document(documents, {"subpoena"})
     latest_counter_affidavit_doc = get_latest_preferred_document(documents, {"counter_affidavit"})
 
+    def is_blank(value):
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return not value.strip()
+        if isinstance(value, list):
+            return len([x for x in value if str(x).strip()]) == 0
+        return False
+
+    def normalize_list_value(value):
+        return normalize_to_list(value)
+
     def get_doc_data(doc):
         extracted_blob = doc.extracted_data or {}
         extracted_meta = extracted_blob.get("metadata", {}) or {}
         reviewed_meta = doc.reviewed_data or {}
 
-        merged = dict(extracted_meta)
-        merged.update(reviewed_meta)
+        if getattr(doc, "is_initiating_document", False):
+            merged = reviewed_meta or extracted_meta
+        elif doc.is_reviewed:
+            merged = reviewed_meta or {}
+        else:
+            return {}
 
-        merged["complainants"] = normalize_to_list(merged.get("complainants"))
-        merged["respondents"] = normalize_to_list(merged.get("respondents"))
-        merged["review_flags"] = normalize_to_list(merged.get("review_flags"))
-
+        merged = dict(merged)
+        merged["complainants"] = normalize_list_value(merged.get("complainants"))
+        merged["respondents"] = normalize_list_value(merged.get("respondents"))
+        merged["review_flags"] = normalize_list_value(merged.get("review_flags"))
         return merged
+
+    def get_source_info(doc):
+        return {
+            "document_id": doc.id,
+            "document_type": doc.document_type,
+            "source_level": "reviewed" if (doc.is_reviewed and doc.reviewed_data) else "extracted",
+            "created_at": doc.created_at.isoformat() if doc.created_at else None,
+            "reviewed_at": doc.reviewed_at.isoformat() if getattr(doc, "reviewed_at", None) else None,
+        }
+
+    def merge_scalar(field_name, proposed_value, source_info):
+        if is_blank(proposed_value):
+            return
+
+        current_value = summary.get(field_name)
+
+        if is_blank(current_value):
+            summary[field_name] = proposed_value
+            summary["summary_field_sources"][field_name] = source_info
+            return
+
+        if current_value == proposed_value:
+            return
+
+        current_source = summary["summary_field_sources"].get(field_name, {})
+        current_level = current_source.get("source_level")
+        proposed_level = source_info.get("source_level")
+
+        current_reviewed_at = current_source.get("reviewed_at") or current_source.get("created_at")
+        proposed_reviewed_at = source_info.get("reviewed_at") or source_info.get("created_at")
+
+        if current_level != "reviewed" and proposed_level == "reviewed":
+            summary[field_name] = proposed_value
+            summary["summary_field_sources"][field_name] = source_info
+            return
+
+        if current_level == "reviewed" and proposed_level == "reviewed":
+            if (proposed_reviewed_at or "") >= (current_reviewed_at or ""):
+                summary["summary_conflicts"].append({
+                    "field": field_name,
+                    "current_value": current_value,
+                    "proposed_value": proposed_value,
+                    "document_id": source_info.get("document_id"),
+                    "document_type": source_info.get("document_type"),
+                    "source_level": source_info.get("source_level"),
+                    "status": "resolved_latest_reviewed_wins",
+                })
+                summary[field_name] = proposed_value
+                summary["summary_field_sources"][field_name] = source_info
+            return
+
+        summary["summary_conflicts"].append({
+            "field": field_name,
+            "current_value": current_value,
+            "proposed_value": proposed_value,
+            "document_id": source_info.get("document_id"),
+            "document_type": source_info.get("document_type"),
+            "source_level": source_info.get("source_level"),
+            "status": "pending",
+        })
+
+    def merge_list(field_name, proposed_value, source_info):
+        proposed_list = normalize_list_value(proposed_value)
+        if not proposed_list:
+            return
+
+        current_list = normalize_list_value(summary.get(field_name))
+
+        if not current_list:
+            summary[field_name] = proposed_list
+            summary["summary_field_sources"][field_name] = source_info
+            return
+
+        if current_list == proposed_list:
+            return
+
+        current_source = summary["summary_field_sources"].get(field_name, {})
+        current_level = current_source.get("source_level")
+        proposed_level = source_info.get("source_level")
+
+        current_reviewed_at = current_source.get("reviewed_at") or current_source.get("created_at")
+        proposed_reviewed_at = source_info.get("reviewed_at") or source_info.get("created_at")
+
+        if current_level != "reviewed" and proposed_level == "reviewed":
+            summary[field_name] = proposed_list
+            summary["summary_field_sources"][field_name] = source_info
+            return
+
+        if current_level == "reviewed" and proposed_level == "reviewed":
+            if (proposed_reviewed_at or "") >= (current_reviewed_at or ""):
+                summary["summary_conflicts"].append({
+                    "field": field_name,
+                    "current_value": current_list,
+                    "proposed_value": proposed_list,
+                    "document_id": source_info.get("document_id"),
+                    "document_type": source_info.get("document_type"),
+                    "source_level": source_info.get("source_level"),
+                    "status": "resolved_latest_reviewed_wins",
+                })
+                summary[field_name] = proposed_list
+                summary["summary_field_sources"][field_name] = source_info
+            return
+
+        summary["summary_conflicts"].append({
+            "field": field_name,
+            "current_value": current_list,
+            "proposed_value": proposed_list,
+            "document_id": source_info.get("document_id"),
+            "document_type": source_info.get("document_type"),
+            "source_level": source_info.get("source_level"),
+            "status": "pending",
+        })
 
     for doc in documents:
         if doc.document_type and doc.document_type not in summary["uploaded_document_types"]:
@@ -271,143 +467,91 @@ def summarize_intake_case_from_documents(db, intake_case_id):
 
     if initiating_doc:
         base_data = get_doc_data(initiating_doc)
+        base_source = get_source_info(initiating_doc)
 
-        summary["document_type"] = first_non_empty(summary["document_type"], base_data.get("document_type"))
-        summary["date_filed"] = first_non_empty(summary["date_filed"], base_data.get("date_filed"))
-        summary["docket_number"] = first_non_empty(summary["docket_number"], base_data.get("docket_number"))
-        summary["case_number"] = first_non_empty(summary["case_number"], base_data.get("case_number"))
-        summary["complainants"] = normalize_to_list(base_data.get("complainants"))
-        summary["respondents"] = normalize_to_list(base_data.get("respondents"))
-        summary["offense_or_violation"] = first_non_empty(summary["offense_or_violation"], base_data.get("offense_or_violation"))
-        summary["case_title"] = first_non_empty(summary["case_title"], base_data.get("case_title"))
-        summary["review_flags"] = normalize_to_list(base_data.get("review_flags"))
+        merge_scalar("document_type", base_data.get("document_type"), base_source)
+        merge_scalar("date_filed", base_data.get("date_filed"), base_source)
+        merge_scalar("docket_number", base_data.get("docket_number"), base_source)
+        merge_scalar("case_number", base_data.get("case_number"), base_source)
+        merge_list("complainants", base_data.get("complainants"), base_source)
+        merge_list("respondents", base_data.get("respondents"), base_source)
+        merge_scalar("offense_or_violation", base_data.get("offense_or_violation"), base_source)
+        merge_scalar("case_title", base_data.get("case_title"), base_source)
+
+        for flag in normalize_list_value(base_data.get("review_flags")):
+            if flag not in summary["review_flags"]:
+                summary["review_flags"].append(flag)
 
     for doc in documents:
         data = get_doc_data(doc)
         if not data:
             continue
 
-        summary["assigned_prosecutor"] = first_non_empty(summary["assigned_prosecutor"], data.get("assigned_prosecutor"))
-        summary["assigned_prosecutor_id"] = first_non_empty(summary["assigned_prosecutor_id"], data.get("assigned_prosecutor_id"))
-        summary["resolution_date"] = first_non_empty(summary["resolution_date"], data.get("resolution_date"))
-        summary["filed_in_court_date"] = first_non_empty(summary["filed_in_court_date"], data.get("filed_in_court_date"))
-        summary["court_branch"] = first_non_empty(summary["court_branch"], data.get("court_branch"))
-        summary["case_status"] = first_non_empty(summary["case_status"], data.get("case_status"))
-        summary["prosecution_result"] = first_non_empty(summary["prosecution_result"], data.get("prosecution_result"))
-        summary["court_result"] = first_non_empty(summary["court_result"], data.get("court_result"))
-        summary["case_number"] = first_non_empty(summary["case_number"], data.get("case_number"))
+        source_info = get_source_info(doc)
 
-        for flag in normalize_to_list(data.get("review_flags")):
+        merge_scalar("document_type", data.get("document_type"), source_info)
+        merge_scalar("date_filed", data.get("date_filed"), source_info)
+        merge_scalar("docket_number", data.get("docket_number"), source_info)
+        merge_scalar("case_number", data.get("case_number"), source_info)
+        merge_list("complainants", data.get("complainants"), source_info)
+        merge_list("respondents", data.get("respondents"), source_info)
+        merge_scalar("offense_or_violation", data.get("offense_or_violation"), source_info)
+        merge_scalar("case_title", data.get("case_title"), source_info)
+        merge_scalar("assigned_prosecutor", data.get("assigned_prosecutor"), source_info)
+        merge_scalar("assigned_prosecutor_id", data.get("assigned_prosecutor_id"), source_info)
+        merge_scalar("resolution_date", data.get("resolution_date"), source_info)
+        merge_scalar("filed_in_court_date", data.get("filed_in_court_date"), source_info)
+        merge_scalar("court_branch", data.get("court_branch"), source_info)
+        merge_scalar("case_status", data.get("case_status"), source_info)
+        merge_scalar("prosecution_result", data.get("prosecution_result"), source_info)
+        merge_scalar("court_result", data.get("court_result"), source_info)
+
+        for flag in normalize_list_value(data.get("review_flags")):
             if flag not in summary["review_flags"]:
                 summary["review_flags"].append(flag)
 
-    if not summary["complainants"]:
-        for doc in documents:
-            data = get_doc_data(doc)
-            complainants = normalize_to_list(data.get("complainants"))
-            if complainants:
-                summary["complainants"] = complainants
-                break
-
-    if not summary["respondents"]:
-        for doc in documents:
-            data = get_doc_data(doc)
-            respondents = normalize_to_list(data.get("respondents"))
-            if respondents:
-                summary["respondents"] = respondents
-                break
-
-    if not summary["date_filed"]:
-        for doc in documents:
-            data = get_doc_data(doc)
-            value = data.get("date_filed")
-            if value:
-                summary["date_filed"] = value
-                break
-
-    if not summary["docket_number"]:
-        for doc in documents:
-            data = get_doc_data(doc)
-            value = data.get("docket_number")
-            if value:
-                summary["docket_number"] = value
-                break
-
-    if not summary["offense_or_violation"]:
-        for doc in documents:
-            data = get_doc_data(doc)
-            value = data.get("offense_or_violation")
-            if value:
-                summary["offense_or_violation"] = value
-                break
-
-    if not summary["case_title"]:
-        for doc in documents:
-            data = get_doc_data(doc)
-            value = data.get("case_title")
-            if value:
-                summary["case_title"] = value
-                break
-
-    if not summary["case_title"]:
-        if summary["complainants"] and summary["respondents"]:
-            summary["case_title"] = f"{', '.join(summary['complainants'])} vs. {', '.join(summary['respondents'])}"
-        elif summary["complainants"]:
-            summary["case_title"] = summary["complainants"][0]
-
     if latest_resolution_doc:
         resolution_data = get_doc_data(latest_resolution_doc)
-        summary["resolution_date"] = first_non_empty(
-            resolution_data.get("resolution_date"),
-            summary.get("resolution_date"),
-        )
-        summary["prosecution_result"] = first_non_empty(
-            resolution_data.get("prosecution_result"),
-            summary.get("prosecution_result"),
-        )
-        summary["case_status"] = first_non_empty(
-            resolution_data.get("case_status"),
-            summary.get("case_status"),
-        )
+        resolution_source = get_source_info(latest_resolution_doc)
+
+        merge_scalar("resolution_date", resolution_data.get("resolution_date"), resolution_source)
+        merge_scalar("prosecution_result", resolution_data.get("prosecution_result"), resolution_source)
+        merge_scalar("case_status", resolution_data.get("case_status"), resolution_source)
+        merge_scalar("case_title", resolution_data.get("case_title"), resolution_source)
 
     if latest_information_doc:
         info_data = get_doc_data(latest_information_doc)
-        summary["case_number"] = first_non_empty(
-            info_data.get("case_number"),
-            summary.get("case_number"),
-        )
-        summary["filed_in_court_date"] = first_non_empty(
-            info_data.get("filed_in_court_date"),
-            summary.get("filed_in_court_date"),
-        )
-        summary["court_branch"] = first_non_empty(
-            info_data.get("court_branch"),
-            summary.get("court_branch"),
-        )
-        summary["case_status"] = first_non_empty(
-            info_data.get("case_status"),
-            summary.get("case_status"),
-        )
+        info_source = get_source_info(latest_information_doc)
+
+        merge_scalar("case_number", info_data.get("case_number"), info_source)
+        merge_scalar("filed_in_court_date", info_data.get("filed_in_court_date"), info_source)
+        merge_scalar("court_branch", info_data.get("court_branch"), info_source)
+        merge_scalar("case_status", info_data.get("case_status"), info_source)
+        merge_scalar("case_title", info_data.get("case_title"), info_source)
 
     if latest_subpoena_doc:
         subpoena_data = get_doc_data(latest_subpoena_doc)
-        summary["assigned_prosecutor"] = first_non_empty(
-            subpoena_data.get("assigned_prosecutor"),
-            summary.get("assigned_prosecutor"),
-        )
-        summary["assigned_prosecutor_id"] = first_non_empty(
-            subpoena_data.get("assigned_prosecutor_id"),
-            summary.get("assigned_prosecutor_id"),
-        )
+        subpoena_source = get_source_info(latest_subpoena_doc)
+
+        merge_scalar("assigned_prosecutor", subpoena_data.get("assigned_prosecutor"), subpoena_source)
+        merge_scalar("assigned_prosecutor_id", subpoena_data.get("assigned_prosecutor_id"), subpoena_source)
 
     if latest_counter_affidavit_doc:
         counter_data = get_doc_data(latest_counter_affidavit_doc)
-        summary["case_status"] = first_non_empty(
-            counter_data.get("case_status"),
-            summary.get("case_status"),
-        )
+        counter_source = get_source_info(latest_counter_affidavit_doc)
+
+        merge_scalar("case_status", counter_data.get("case_status"), counter_source)
+
+    if is_blank(summary["case_title"]):
+        if summary["complainants"] and summary["respondents"]:
+            summary["case_title"] = f"{', '.join(summary['complainants'])} VS. {', '.join(summary['respondents'])}"
+        elif summary["complainants"]:
+            summary["case_title"] = summary["complainants"][0]
+        elif summary["respondents"]:
+            summary["case_title"] = summary["respondents"][0]
 
     return summary
+        
 
 def get_latest_intake_document_type(db, intake_case_id):
     latest_doc = (

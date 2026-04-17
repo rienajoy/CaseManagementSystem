@@ -141,9 +141,29 @@ class IntakeCase(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
+    # workflow/core
     case_type = Column(String(10), nullable=False)  # INV or INQ
     intake_status = Column(String(50), nullable=False, default="received")
     review_notes = Column(Text, nullable=True)
+
+    # canonical intake metadata
+    docket_number = Column(String, unique=True, index=True, nullable=True)
+    case_number = Column(String, index=True, nullable=True)
+    case_title = Column(String, nullable=True)
+    offense_or_violation = Column(String, nullable=True)
+
+    assigned_prosecutor_id = Column(Integer, ForeignKey("users.user_id"), nullable=True)
+
+    date_filed = Column(DateTime, nullable=True)
+    resolution_date = Column(DateTime, nullable=True)
+    filed_in_court_date = Column(DateTime, nullable=True)
+    court_branch = Column(String, nullable=True)
+
+    prosecution_result = Column(String, nullable=False, default="none")
+    court_result = Column(String, nullable=False, default="none")
+
+    # optional helper field if serializer/list page expects it
+    intake_document_status = Column(String(50), nullable=True)
 
     extracted_data = Column(JSON, nullable=True)
 
@@ -151,11 +171,11 @@ class IntakeCase(Base):
     received_by = Column(Integer, ForeignKey("users.user_id"), nullable=True)
     received_at = Column(DateTime, nullable=True)
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
     converted_case_id = Column(Integer, ForeignKey("cases.id"), nullable=True)
     converted_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     
 
@@ -322,7 +342,6 @@ class IntakeComplianceItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     intake_case_id = Column(Integer, ForeignKey("intake_cases.id"), nullable=False, index=True)
-    intake_case_id = Column(Integer, ForeignKey("intake_cases.id"), nullable=True, index=True)
     case_id = Column(Integer, ForeignKey("cases.id"), nullable=True, index=True)
     related_document_id = Column(Integer, ForeignKey("intake_case_documents.id"), nullable=True)
 
@@ -383,3 +402,61 @@ class CaseCourtEvent(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+
+class IntakeDocumentTrackingEvent(Base):
+    __tablename__ = "intake_document_tracking_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    intake_case_id = Column(
+        Integer,
+        ForeignKey("intake_cases.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    related_document_id = Column(
+        Integer,
+        ForeignKey("intake_case_documents.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    document_type = Column(String(100), nullable=True, index=True)
+
+    action_type = Column(String(50), nullable=False, index=True)
+    action_date = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    from_location = Column(String(255), nullable=True)
+    from_office = Column(String(255), nullable=True)
+    from_holder_name = Column(String(255), nullable=True)
+
+    to_location = Column(String(255), nullable=True)
+    to_office = Column(String(255), nullable=True)
+    to_holder_name = Column(String(255), nullable=True)
+
+    purpose = Column(String(255), nullable=True)
+    reason = Column(Text, nullable=True)
+    method = Column(String(100), nullable=True)
+    reference_no = Column(String(100), nullable=True)
+    notes = Column(Text, nullable=True)
+
+    acknowledged_at = Column(DateTime, nullable=True)
+    acknowledged_by_name = Column(String(255), nullable=True)
+
+    created_by_id = Column(
+        Integer,
+        ForeignKey("users.user_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_by_name = Column(String(255), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
